@@ -1,11 +1,16 @@
 // ============================================================
-// seed.js - 种子数据脚本
-// 运行 `node seed.js` 可向空白地图填充示例世界观数据
-// 运行 `node seed.js --clean` 可清空所有数据重置为空白
+// seed.js - 种子数据脚本 (v2)
+// 修复清单:
+//   1. 直接调数据层, 不走 HTTP (绕开鉴权引导的鸡生蛋问题)
+//   2. 修复 "carve" 残留拼写
+//   3. clean 分支: 先建目录, 重建密钥文件, 错误处理
+//   4. 移除硬编码 API_KEY 和无意义的 sleep(100)
+//   5. 引擎要求 Node >=18 (package.json 已更新)
 // ============================================================
 
-const BASE = process.env.API_BASE || 'http://localhost:3000';
-const API_KEY = 'writer-agent-key-001';
+const fs = require('fs');
+const path = require('path');
+const db = require('./db');
 
 // ---- 示例区域 ----
 const REGIONS = [
@@ -68,7 +73,7 @@ const LOCATIONS = [
   },
   {
     name: '龙骨要塞', coordinates: [545, 680], type: 'fortress', regionId: 'dragon_spine',
-    description: ' carve入龙脊山脉的坚不可摧的要塞，以古龙骸骨为基建成。守护北方通道，抵御冰封荒原的凶兽南下。',
+    description: '嵌入龙脊山脉的坚不可摧的要塞，以古龙骸骨为基建成。守护北方通道，抵御冰封荒原的凶兽南下。',
     tags: ['军事', '要塞', '龙骨'], relatedCharacters: ['要塞指挥官索拉'],
     history: [{ time: '纪元200年', event: '屠龙英雄以龙骨筑城' }],
     context: '初始世界观设定 - 创建军事要塞'
@@ -106,69 +111,107 @@ const LOCATIONS = [
   },
 ];
 
-// ---- 执行 ----
-async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function seed() {
+// ============================================================
+// 填充种子数据 - 直接调数据层, 不走 HTTP
+// ============================================================
+function seed() {
   console.log('开始填充种子数据...\n');
 
   // 创建区域
   console.log(`创建 ${REGIONS.length} 个区域...`);
   for (const region of REGIONS) {
-    const res = await fetch(`${BASE}/api/map/features`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-      body: JSON.stringify(region),
-    });
-    const data = await res.json();
-    if (data.success) {
-      console.log(`  ✓ ${region.properties.name}`);
-    } else {
-      console.error(`  ✗ ${region.properties.name}: ${data.message}`);
+    // 检查是否已存在 (避免重复运行时产生重复)
+    if (db.map.featureIdExists(region.properties.id)) {
+      console.log(`  - ${region.properties.name} (已存在, 跳过)`);
+      continue;
     }
-    await sleep(100);
+    db.map.addFeature(region);
+    console.log(`  + ${region.properties.name}`);
   }
 
   // 创建地点
   console.log(`\n创建 ${LOCATIONS.length} 个地点...`);
   for (const loc of LOCATIONS) {
-    const res = await fetch(`${BASE}/api/locations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-      body: JSON.stringify(loc),
-    });
-    const data = await res.json();
-    if (data.success) {
-      console.log(`  ✓ ${loc.name}`);
-    } else {
-      console.error(`  ✗ ${loc.name}: ${data.message}`);
+    // 检查名称是否已存在 (避免重复运行时产生重复)
+    const existing = db.locations.getAll().find((l) => l.name === loc.name);
+    if (existing) {
+      console.log(`  - ${loc.name} (已存在, 跳过)`);
+      continue;
     }
-    await sleep(100);
+    db.locations.create(loc, 'seed-script');
+    console.log(`  + ${loc.name}`);
   }
 
+  // 创建初始版本快照
+  db.versions.createSnapshot('种子数据初始化 - 含示例区域和地点', 'seed-script', true);
+  console.log(`\n已创建里程碑版本快照`);
+
   console.log('\n种子数据填充完成！');
-  console.log(`访问 http://localhost:3000 查看地图`);
+  console.log('访问 http://localhost:3000 查看地图');
 }
 
-async function clean() {
+// ============================================================
+// 清空数据 - 建目录, 清文件, 重建密钥
+// ============================================================
+function clean() {
   console.log('清空所有数据...\n');
-  const fs = require('fs');
-  const path = require('path');
-  const dataDir = path.join(__dirname, 'data');
 
+  const dataDir = path.join(__dirname, 'data');
+  const snapshotDir = path.join(dataDir, 'snapshots');
+
+  // 1. 确保目录存在
+  if (!fs.existsSync(dataDir)) {
+    fs.mkdirSync(dataDir, { recursive: true });
+    console.log('  创建 data 目录');
+  }
+  if (!fs.existsSync(snapshotDir)) {
+    fs.mkdirSync(snapshotDir, { recursive: true });
+  }
+
+  // 2. 清空快照文件
+  if (fs.existsSync(snapshotDir)) {
+    const snapshots = fs.readdirSync(snapshotDir);
+    for (const f of snapshots) {
+      fs.unlinkSync(path.join(snapshotDir, f));
+    }
+    console.log(`  清除 ${snapshots.length} 个快照文件`);
+  }
+
+  // 3. 写入空数据文件
   fs.writeFileSync(path.join(dataDir, 'locations.json'), '[]', 'utf-8');
   fs.writeFileSync(path.join(dataDir, 'map.geojson.json'), JSON.stringify({ type: 'FeatureCollection', features: [] }, null, 2), 'utf-8');
   fs.writeFileSync(path.join(dataDir, 'logs.json'), '[]', 'utf-8');
-  fs.writeFileSync(path.join(dataDir, 'versions.json'), JSON.stringify([
-    { version: 1, description: '初始版本 - 空白地图', createdAt: new Date().toISOString(), createdBy: 'system', snapshot: { locations: [], geojson: { type: 'FeatureCollection', features: [] } } }
-  ], null, 2), 'utf-8');
+  fs.writeFileSync(path.join(dataDir, 'versions.json'), '[]', 'utf-8');
+  console.log('  数据文件已重置 (locations, map, logs, versions)');
 
-  console.log('数据已清空，请重启服务器。');
+  // 4. 删除 api-keys.json, 下次启动时 bootstrap 会重建
+  const keysFile = path.join(dataDir, 'api-keys.json');
+  if (fs.existsSync(keysFile)) {
+    fs.unlinkSync(keysFile);
+    console.log('  已删除 api-keys.json (下次启动自动重建)');
+  }
+
+  // 5. 清理临时和备份文件
+  for (const ext of ['.tmp', '.bak']) {
+    for (const name of ['locations.json', 'map.geojson.json', 'logs.json', 'versions.json', 'api-keys.json']) {
+      const p = path.join(dataDir, name + ext);
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+    }
+  }
+
+  console.log('\n数据已清空。请重启服务器 (npm start) 后重新填充数据 (npm run seed)。');
 }
 
-// 命令行参数
-if (process.argv.includes('--clean')) {
-  clean();
-} else {
-  seed().catch(err => console.error('填充失败:', err.message));
+// ============================================================
+// 命令行入口
+// ============================================================
+try {
+  if (process.argv.includes('--clean')) {
+    clean();
+  } else {
+    seed();
+  }
+} catch (err) {
+  console.error('\n执行失败:', err.message);
+  process.exit(1);
 }

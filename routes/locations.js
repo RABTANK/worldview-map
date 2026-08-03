@@ -8,6 +8,7 @@ const router = express.Router();
 const { locations, logs, versions } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { validateLocationCreate, validateLocationUpdate } = require('../middleware/validation');
+const { remember } = require('../services/memory');
 
 // ============================================================
 // 查询接口（公开读取）
@@ -27,16 +28,16 @@ router.get('/', (req, res) => {
 // 获取指定坐标范围内的地点
 router.get('/range', (req, res) => {
   const { x1, y1, x2, y2 } = req.query;
-  if ([x1, y1, x2, y2].some((v) => v === undefined)) {
+  // 校验四个参数均为有限数值：缺失(undefined)、非数字字符串均会导致 parseFloat 返回 NaN
+  const nums = [x1, y1, x2, y2].map((v) => parseFloat(v));
+  if (nums.some((n) => !Number.isFinite(n))) {
     return res.status(400).json({
       error: 'BAD_REQUEST',
-      message: '需要提供 x1, y1, x2, y2 参数',
+      message: '需要提供有效的 x1, y1, x2, y2 数值参数',
     });
   }
-  const result = locations.getByRange(
-    parseFloat(x1), parseFloat(y1),
-    parseFloat(x2), parseFloat(y2)
-  );
+  const [nx1, ny1, nx2, ny2] = nums;
+  const result = locations.getByRange(nx1, ny1, nx2, ny2);
   res.json({
     success: true,
     count: result.length,
@@ -74,10 +75,13 @@ router.post('/', authMiddleware, validateLocationCreate, (req, res) => {
     });
   }
 
+  // 在数据修改前创建版本快照
+  versions.createSnapshot(`即将执行: 新增地点 ${name}`, req.agent.agentName);
+
   const loc = locations.create(req.body, req.agent.agentName);
 
-  // 记录操作日志
-  logs.add({
+  // 记录操作日志（通过记忆服务）
+  remember({
     agentName: req.agent.agentName,
     action: 'create',
     targetType: 'location',
@@ -85,9 +89,6 @@ router.post('/', authMiddleware, validateLocationCreate, (req, res) => {
     details: { name: loc.name, coordinates: loc.coordinates, type: loc.type },
     context: req.body.context || `Agent ${req.agent.agentName} 创建了地点 "${loc.name}"`,
   });
-
-  // 自动创建版本快照
-  versions.createSnapshot(`新增地点: ${loc.name}`, req.agent.agentName);
 
   res.status(201).json({
     success: true,
@@ -118,14 +119,21 @@ router.put('/:id', authMiddleware, validateLocationUpdate, (req, res) => {
     }
   }
 
+  // 在数据修改前创建版本快照
+  versions.createSnapshot(`即将执行: 更新地点 ${existing.name}`, req.agent.agentName);
+
   const updated = locations.update(req.params.id, req.body, req.agent.agentName);
 
-  logs.add({
+  // 记录操作日志：仅保存变更字段，避免存储完整对象
+  remember({
     agentName: req.agent.agentName,
     action: 'update',
     targetType: 'location',
     targetId: updated.id,
-    details: { before: existing, after: updated },
+    details: {
+      name: existing.name,
+      changedFields: Object.keys(req.body).filter((k) => k !== 'context'),
+    },
     context: req.body.context || `Agent ${req.agent.agentName} 更新了地点 "${updated.name}"`,
   });
 
@@ -146,9 +154,13 @@ router.delete('/:id', authMiddleware, (req, res) => {
     });
   }
 
+  // 在数据修改前创建版本快照
+  versions.createSnapshot(`即将执行: 删除地点 ${existing.name}`, req.agent.agentName);
+
   locations.delete(req.params.id);
 
-  logs.add({
+  // 记录操作日志（通过记忆服务）
+  remember({
     agentName: req.agent.agentName,
     action: 'delete',
     targetType: 'location',
@@ -156,8 +168,6 @@ router.delete('/:id', authMiddleware, (req, res) => {
     details: { name: existing.name, coordinates: existing.coordinates },
     context: req.body?.context || `Agent ${req.agent.agentName} 删除了地点 "${existing.name}"`,
   });
-
-  versions.createSnapshot(`删除地点: ${existing.name}`, req.agent.agentName);
 
   res.json({
     success: true,

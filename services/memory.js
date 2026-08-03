@@ -1,20 +1,17 @@
 // ============================================================
-// services/memory.js - Agent 记忆服务
-// 提供与 Zep 记忆库的集成接口，记录世界观演变历史
-// 当前实现为本地存储，可平滑切换到 Zep 远程服务
+// services/memory.js - Agent 记忆服务 (v2)
+// 修复清单:
+//   1. 所有写路由统一通过 remember() 记录日志 (单一收口)
+//   2. 统计使用 Map 避免原型污染 (constructor 问题)
+//   3. recall 限制条数校验
 // ============================================================
 
 const { logs, versions } = require('../db');
 
 /**
- * 记录 Agent 操作到记忆库
+ * 记录 Agent 操作到记忆库 (唯一日志写入收口)
+ * 所有路由应调用此函数而非直接 logs.add()
  * @param {Object} entry - 操作记录
- * @param {string} entry.agentName - Agent 名称
- * @param {string} entry.action - 操作类型
- * @param {string} entry.targetType - 目标类型
- * @param {string} entry.targetId - 目标 ID
- * @param {Object} entry.details - 操作详情
- * @param {string} entry.context - 操作上下文/原因
  * @returns {Object} 记忆记录
  */
 function remember(entry) {
@@ -43,7 +40,11 @@ function remember(entry) {
 function recall(agentName, limit = 50) {
   const filter = {};
   if (agentName) filter.agentName = agentName;
-  if (limit) filter.limit = limit;
+  // 钳制 limit
+  const parsedLimit = parseInt(limit, 10);
+  if (!isNaN(parsedLimit) && parsedLimit >= 0) {
+    filter.limit = parsedLimit;
+  }
 
   return logs.getAll(filter).map((log) => ({
     id: log.id,
@@ -59,27 +60,30 @@ function recall(agentName, limit = 50) {
 /**
  * 获取世界观演变摘要
  * 返回各类操作的统计信息
+ * 关键修复: 使用 Map 避免原型污染 (如 action 名为 "constructor")
  * @returns {Object} 摘要
  */
 function getWorldviewSummary() {
   const allLogs = logs.getAll({});
   const allVersions = versions.getAll();
 
-  const stats = {
+  // 使用 Map 避免原型链上的属性被误访问
+  const byAction = new Map();
+  const byAgent = new Map();
+
+  for (const log of allLogs) {
+    byAction.set(log.action, (byAction.get(log.action) || 0) + 1);
+    byAgent.set(log.agentName, (byAgent.get(log.agentName) || 0) + 1);
+  }
+
+  return {
     totalOperations: allLogs.length,
     totalVersions: allVersions.length,
-    byAction: {},
-    byAgent: {},
+    byAction: Object.fromEntries(byAction),
+    byAgent: Object.fromEntries(byAgent),
     latestVersion: allVersions[0]?.version || 0,
     latestOperation: allLogs[0]?.timestamp || null,
   };
-
-  for (const log of allLogs) {
-    stats.byAction[log.action] = (stats.byAction[log.action] || 0) + 1;
-    stats.byAgent[log.agentName] = (stats.byAgent[log.agentName] || 0) + 1;
-  }
-
-  return stats;
 }
 
 module.exports = { remember, recall, getWorldviewSummary };

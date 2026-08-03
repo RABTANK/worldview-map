@@ -5,10 +5,13 @@
 
 const express = require('express');
 const router = express.Router();
-const { versions, logs } = require('../db');
-const { authMiddleware } = require('../middleware/auth');
+const { versions } = require('../db');
+const { authMiddleware, adminMiddleware } = require('../middleware/auth');
+const { remember } = require('../services/memory');
 
 // 获取版本列表
+// 注意: 快照数据现已独立存储，版本对象只保留元数据，
+// 因此直接读取 v.locationCount / v.featureCount，不再访问 v.snapshot。
 router.get('/', (req, res) => {
   const all = versions.getAll();
   res.json({
@@ -19,26 +22,35 @@ router.get('/', (req, res) => {
       description: v.description,
       createdAt: v.createdAt,
       createdBy: v.createdBy,
-      locationCount: v.snapshot?.locations?.length || 0,
-      featureCount: v.snapshot?.geojson?.features?.length || 0,
+      isMilestone: v.isMilestone,
+      locationCount: v.locationCount || 0,
+      featureCount: v.featureCount || 0,
     })),
   });
 });
 
 // 获取特定版本详情（含快照）
+// 快照数据存储在独立文件中，需要单独加载并合并到版本元数据响应里。
 router.get('/:version', (req, res) => {
-  const ver = versions.getById(parseInt(req.params.version, 10));
+  const versionNum = parseInt(req.params.version, 10);
+  const ver = versions.getById(versionNum);
   if (!ver) {
     return res.status(404).json({
       error: 'NOT_FOUND',
       message: `版本 ${req.params.version} 不存在`,
     });
   }
-  res.json({ success: true, data: ver });
+
+  // 从独立文件加载快照数据并合并到版本元数据中
+  const snapshotData = versions.getSnapshotData(versionNum);
+  const data = { ...ver, snapshot: snapshotData };
+
+  res.json({ success: true, data });
 });
 
 // 回滚到指定版本
-router.post('/:version/rollback', authMiddleware, (req, res) => {
+// 需要管理员权限 (adminMiddleware 在 authMiddleware 之后执行)
+router.post('/:version/rollback', authMiddleware, adminMiddleware, (req, res) => {
   const versionNum = parseInt(req.params.version, 10);
   const target = versions.getById(versionNum);
   if (!target) {
@@ -48,23 +60,36 @@ router.post('/:version/rollback', authMiddleware, (req, res) => {
     });
   }
 
-  const restored = versions.rollback(versionNum);
+  // 回滚可能因快照数据文件缺失而失败，需要捕获异常
+  let restored;
+  try {
+    restored = versions.rollback(versionNum);
+  } catch (err) {
+    return res.status(500).json({
+      error: 'ROLLBACK_FAILED',
+      message: `回滚失败：${err.message}`,
+    });
+  }
 
-  logs.add({
+  remember({
     agentName: req.agent.agentName,
     action: 'rollback',
     targetType: 'version',
     targetId: String(versionNum),
     details: {
       description: target.description,
-      restoredLocations: target.snapshot?.locations?.length || 0,
-      restoredFeatures: target.snapshot?.geojson?.features?.length || 0,
+      restoredLocations: target.locationCount || 0,
+      restoredFeatures: target.featureCount || 0,
     },
     context: req.body?.context || `Agent ${req.agent.agentName} 回滚到版本 ${versionNum}`,
   });
 
-  // 回滚后创建新版本快照标记
-  versions.createSnapshot(`从版本 ${versionNum} 回滚`, req.agent.agentName);
+  // 回滚后创建新的里程碑快照，记录回滚后的状态
+  versions.createSnapshot(
+    `从版本 ${versionNum} 回滚后的状态`,
+    req.agent.agentName,
+    true
+  );
 
   res.json({
     success: true,
@@ -79,12 +104,14 @@ router.post('/:version/rollback', authMiddleware, (req, res) => {
 
 // 手动创建版本快照
 router.post('/snapshot', authMiddleware, (req, res) => {
+  // 第三个参数 true 标记为里程碑快照
   const snapshot = versions.createSnapshot(
     req.body.description || '手动快照',
-    req.agent.agentName
+    req.agent.agentName,
+    true
   );
 
-  logs.add({
+  remember({
     agentName: req.agent.agentName,
     action: 'snapshot',
     targetType: 'version',

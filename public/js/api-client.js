@@ -156,9 +156,33 @@ const TYPE_CONFIG = {
   other:    { icon: '\u{2753}',  color: '#a9a9a9', label: '其他' },
 };
 
-// ---- 预置 API Key（仅供前端演示，生产环境应通过安全方式管理）----
+// ---- API Key 管理 ----
+// 安全修复: 前端不再硬编码写权限密钥
+// 读接口默认免鉴权, 写操作需用户手动输入 API Key
 const API_KEYS = {
-  writer: 'writer-agent-key-001',
-  rpa: 'rpa-agent-key-001',
-  viewer: 'viewer-key-001',
+  viewer: null, // 读接口免 Key, 设为 null
+  writer: null, // 用户手动输入, 不预置
+  rpa: null,
+  admin: null,
 };
+
+// 从 localStorage 读取用户保存的 API Key (仅本机浏览器)
+function getStoredApiKey() {
+  try {
+    return localStorage.getItem('worldview_api_key') || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setStoredApiKey(key) {
+  try {
+    if (key) {
+      localStorage.setItem('worldview_api_key', key);
+    } else {
+      localStorage.removeItem('worldview_api_key');
+    }
+  } catch (e) {
+    // localStorage 不可用时静默
+  }
+}

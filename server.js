@@ -1,19 +1,43 @@
 // ============================================================
-// server.js - 交互式世界观地图系统 · 主服务器
-// 三层架构：前端展示层 → 后端服务层 → 数据存储层
+// server.js - 交互式世界观地图系统 · 主服务器 (v2)
+// 修复清单:
+//   1. helmet 安全头
+//   2. express-rate-limit 限速
+//   3. CORS 可配置
+//   4. API 路径 404 兜底 (返回 JSON 而非 HTML)
+//   5. 全局错误处理不泄露内部信息
 // ============================================================
 
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const config = require('./config');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || '0.0.0.0'; // 监听所有网络接口，便于局域网/远程访问
+const PORT = config.port;
+const HOST = config.host;
+
+// ---- 安全中间件 ----
+app.use(helmet({ contentSecurityPolicy: false }));
+
+// ---- 限速 ----
+const limiter = rateLimit({
+  windowMs: config.rateLimitWindow,
+  max: config.rateLimitMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'RATE_LIMITED',
+    message: '请求过于频繁，请稍后再试',
+  },
+});
 
 // ---- 中间件 ----
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(cors({ origin: config.corsOrigin }));
+app.use(express.json({ limit: config.bodyLimit }));
+app.use('/api', limiter); // 只对 API 路径限速
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- API 路由 ----
@@ -25,12 +49,10 @@ app.use('/api/logs', require('./routes/logs'));
 // ---- Agent 记忆接口 ----
 const memory = require('./services/memory');
 
-// 获取世界观演变摘要
 app.get('/api/memory/summary', (req, res) => {
   res.json({ success: true, data: memory.getWorldviewSummary() });
 });
 
-// 检索 Agent 记忆时间线
 app.get('/api/memory/timeline', (req, res) => {
   const { agent, limit } = req.query;
   const data = memory.recall(agent, limit ? parseInt(limit, 10) : 50);
@@ -46,7 +68,7 @@ app.get('/api/health', (req, res) => {
 app.get('/api', (req, res) => {
   res.json({
     name: '交互式世界观地图系统 API',
-    version: '1.0.0',
+    version: '2.0.0',
     description: 'Agent 友好的动态世界观构建平台',
     endpoints: {
       locations: {
@@ -64,12 +86,12 @@ app.get('/api', (req, res) => {
         'POST /api/map/features': '新增地图区域 (需 API Key)',
         'PUT /api/map/features/:id': '更新地图区域 (需 API Key)',
         'DELETE /api/map/features/:id': '删除地图区域 (需 API Key)',
-        'PUT /api/map/structure': '批量替换地图结构 (需 API Key)',
+        'PUT /api/map/structure': '批量替换地图结构 (需管理员 API Key)',
       },
       versions: {
         'GET /api/versions': '获取版本列表',
         'GET /api/versions/:version': '获取版本详情 (含快照)',
-        'POST /api/versions/:version/rollback': '回滚到指定版本 (需 API Key)',
+        'POST /api/versions/:version/rollback': '回滚到指定版本 (需管理员 API Key)',
         'POST /api/versions/snapshot': '手动创建版本快照 (需 API Key)',
       },
       logs: {
@@ -81,29 +103,42 @@ app.get('/api', (req, res) => {
         'GET /api/memory/timeline': 'Agent 记忆时间线 (支持 ?agent= &limit=)',
       },
     },
-    auth: '写操作需在请求头携带 X-API-Key',
+    auth: '写操作需在请求头携带 X-API-Key; 回滚和整图替换需管理员权限',
     coordinateSystem: '统一相对坐标系 (0-1000 平面坐标)',
   });
 });
 
-// ---- 全局错误处理 ----
+// ---- API 404 兜底 (返回 JSON 而非 HTML) ----
+app.use('/api/*', (req, res) => {
+  res.status(404).json({
+    error: 'NOT_FOUND',
+    message: `API 路径不存在: ${req.method} ${req.originalUrl}`,
+  });
+});
+
+// ---- 全局错误处理 (不泄露内部信息) ----
 app.use((err, req, res, next) => {
-  console.error('[ERROR]', err.message);
+  const requestId = `err_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+  console.error(`[ERROR][${requestId}]`, err.message);
+
+  // 开发环境返回详情, 生产环境只返回通用信息
+  const isDev = process.env.NODE_ENV !== 'production';
+
   res.status(500).json({
     error: 'INTERNAL_ERROR',
-    message: '服务器内部错误',
-    detail: err.message,
+    message: isDev ? err.message : '服务器内部错误',
+    requestId: requestId,
+    ...(isDev && { stack: err.stack }),
   });
 });
 
 // ---- 启动服务 ----
 app.listen(PORT, HOST, () => {
   console.log('╔══════════════════════════════════════════════════╗');
-  console.log('║    交互式世界观地图系统 · 服务已启动              ║');
+  console.log('║    交互式世界观地图系统 v2 · 服务已启动            ║');
   console.log('╠══════════════════════════════════════════════════╣');
   console.log(`║  监听地址:  ${HOST}:${PORT}                      ║`);
   console.log(`║  本机访问:  http://localhost:${PORT}                ║`);
-  console.log(`║  局域网:    http://<本机IP>:${PORT}                ║`);
   console.log(`║  API 总览:  http://localhost:${PORT}/api            ║`);
   console.log(`║  健康检查:  http://localhost:${PORT}/api/health     ║`);
   console.log('╚══════════════════════════════════════════════════╝');

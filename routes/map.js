@@ -6,8 +6,9 @@
 const express = require('express');
 const router = express.Router();
 const { map, logs, versions } = require('../db');
-const { authMiddleware } = require('../middleware/auth');
-const { validateGeoJSONFeature } = require('../middleware/validation');
+const { authMiddleware, adminMiddleware } = require('../middleware/auth');
+const { validateGeoJSONFeature, validateGeoJSONFeatureUpdate } = require('../middleware/validation');
+const { remember } = require('../services/memory');
 
 // 获取全量地图结构 (GeoJSON)
 router.get('/structure', (req, res) => {
@@ -47,23 +48,39 @@ router.get('/features/:id', (req, res) => {
 
 // 新增地图区域 (Feature)
 router.post('/features', authMiddleware, validateGeoJSONFeature, (req, res) => {
+  // 提取 context 仅用于日志，不透传到数据层
+  const { context, ...featureData } = req.body;
+  const id = req.body.properties.id || require('uuid').v4();
+
+  // 重复 ID 检查
+  if (map.featureIdExists(id)) {
+    return res.status(409).json({
+      error: 'CONFLICT',
+      message: `区域 ID "${id}" 已存在`,
+    });
+  }
+
   const feature = {
-    ...req.body,
+    ...featureData,
     properties: {
       ...req.body.properties,
-      id: req.body.properties.id || `region_${Date.now()}`,
+      id: id,
       createdAt: new Date().toISOString(),
     },
   };
+
+  // 修改前拍快照 ("即将执行" 语义)
+  versions.createSnapshot(`即将执行: 新增区域 "${feature.properties.name}"`, req.agent.agentName);
+
   map.addFeature(feature);
 
-  logs.add({
+  remember({
     agentName: req.agent.agentName,
     action: 'map_update',
     targetType: 'map',
     targetId: feature.properties.id,
     details: { name: feature.properties.name, featureType: feature.geometry.type },
-    context: req.body.context || `Agent ${req.agent.agentName} 新增了区域 "${feature.properties.name}"`,
+    context: context || `Agent ${req.agent.agentName} 新增了区域 "${feature.properties.name}"`,
   });
 
   res.status(201).json({
@@ -74,7 +91,7 @@ router.post('/features', authMiddleware, validateGeoJSONFeature, (req, res) => {
 });
 
 // 更新地图区域
-router.put('/features/:id', authMiddleware, (req, res) => {
+router.put('/features/:id', authMiddleware, validateGeoJSONFeatureUpdate, (req, res) => {
   const existing = map.getFeatureById(req.params.id);
   if (!existing) {
     return res.status(404).json({
@@ -83,15 +100,21 @@ router.put('/features/:id', authMiddleware, (req, res) => {
     });
   }
 
-  const updated = map.updateFeature(req.params.id, req.body);
+  // 提取 context 仅用于日志，不透传到数据层
+  const { context, ...updateData } = req.body;
 
-  logs.add({
+  // 修改前拍快照 ("即将执行" 语义)
+  versions.createSnapshot(`即将执行: 更新区域 "${req.params.id}"`, req.agent.agentName);
+
+  const updated = map.updateFeature(req.params.id, updateData);
+
+  remember({
     agentName: req.agent.agentName,
     action: 'map_update',
     targetType: 'map',
     targetId: req.params.id,
     details: { before: existing.properties?.name, after: updated.properties?.name },
-    context: req.body.context || `Agent ${req.agent.agentName} 更新了区域`,
+    context: context || `Agent ${req.agent.agentName} 更新了区域`,
   });
 
   res.json({
@@ -111,15 +134,21 @@ router.delete('/features/:id', authMiddleware, (req, res) => {
     });
   }
 
+  // 提取 context 仅用于日志，不透传到数据层
+  const context = req.body?.context;
+
+  // 修改前拍快照 ("即将执行" 语义)
+  versions.createSnapshot(`即将执行: 删除区域 "${existing.properties?.name}"`, req.agent.agentName);
+
   map.removeFeature(req.params.id);
 
-  logs.add({
+  remember({
     agentName: req.agent.agentName,
     action: 'map_update',
     targetType: 'map',
     targetId: req.params.id,
     details: { name: existing.properties?.name },
-    context: req.body?.context || `Agent ${req.agent.agentName} 删除了区域 "${existing.properties?.name}"`,
+    context: context || `Agent ${req.agent.agentName} 删除了区域 "${existing.properties?.name}"`,
   });
 
   res.json({
@@ -129,7 +158,7 @@ router.delete('/features/:id', authMiddleware, (req, res) => {
 });
 
 // 批量替换整个地图结构（高级操作）
-router.put('/structure', authMiddleware, (req, res) => {
+router.put('/structure', authMiddleware, adminMiddleware, (req, res) => {
   if (!req.body.type || req.body.type !== 'FeatureCollection') {
     return res.status(422).json({
       error: 'VALIDATION_ERROR',
@@ -137,18 +166,22 @@ router.put('/structure', authMiddleware, (req, res) => {
     });
   }
 
-  map.replaceAll(req.body);
+  // 提取 context 仅用于日志，不透传到数据层
+  const { context, ...structureData } = req.body;
 
-  logs.add({
+  // 修改前拍快照 ("即将执行" 语义)
+  versions.createSnapshot(`即将执行: 替换整个地图结构`, req.agent.agentName);
+
+  map.replaceAll(structureData);
+
+  remember({
     agentName: req.agent.agentName,
     action: 'map_update',
     targetType: 'map',
     targetId: 'all',
     details: { featureCount: req.body.features?.length || 0 },
-    context: req.body.context || `Agent ${req.agent.agentName} 替换了整个地图结构`,
+    context: context || `Agent ${req.agent.agentName} 替换了整个地图结构`,
   });
-
-  versions.createSnapshot('替换地图结构', req.agent.agentName);
 
   res.json({
     success: true,
