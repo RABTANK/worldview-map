@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>交互式世界观地图系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部导航栏 -->
+    <header id="topbar">
+      <div class="topbar-left">
+        <h1 class="logo">交互式世界观地图</h1>
+        <span class="subtitle">Agent 友好的动态世界观构建平台</span>
+      </div>
+      <div class="topbar-right">
+        <div class="status-item">
+          <span class="status-label">版本</span>
+          <span id="version-badge" class="badge badge-info">v1</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">地点</span>
+          <span id="location-count" class="badge badge-gold">0</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">区域</span>
+          <span id="region-count" class="badge badge-cyan">0</span>
+        </div>
+        <button id="refresh-btn" class="btn btn-icon" title="刷新数据">&#x27F3;</button>
+        <button id="auto-refresh-toggle" class="btn btn-sm">自动刷新: 开</button>
+        <button id="api-panel-btn" class="btn btn-accent">API 文档</button>
+      </div>
+    </header>
+
+    <!-- 主内容区 -->
+    <main id="main">
+      <!-- 左侧控制面板 -->
+      <aside id="sidebar">
+        <section class="panel">
+          <h3 class="panel-title">图层管理</h3>
+          <div class="layer-controls">
+            <label class="checkbox-label">
+              <input type="checkbox" id="layer-regions" checked>
+              <span class="checkbox-custom"></span>
+              <span>区域底图</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="layer-markers" checked>
+              <span class="checkbox-custom"></span>
+              <span>地点标记</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="layer-labels" checked>
+              <span class="checkbox-custom"></span>
+              <span>地点名称</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="layer-roads" checked>
+              <span class="checkbox-custom"></span>
+              <span>道路网络</span>
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="layer-grid">
+              <span class="checkbox-custom"></span>
+              <span>坐标网格</span>
+            </label>
+          </div>
+          <div class="seed-control">
+            <label class="seed-label">道路种子</label>
+            <div class="seed-row">
+              <input type="number" id="road-seed-input" class="seed-input" value="42" min="0" max="999999">
+              <button id="road-seed-apply" class="btn btn-sm">应用</button>
+              <button id="road-seed-random" class="btn btn-sm" title="随机种子">&#x1F3B2;</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h3 class="panel-title">搜索地点</h3>
+          <input type="text" id="search-input" class="search-input" placeholder="输入地点名称...">
+          <div id="search-results" class="search-results"></div>
+        </section>
+
+        <section class="panel">
+          <h3 class="panel-title">类型筛选</h3>
+          <div id="type-filters" class="type-filters"></div>
+        </section>
+
+        <section class="panel">
+          <h3 class="panel-title">版本控制</h3>
+          <select id="version-select" class="version-select">
+            <option value="">-- 选择版本 --</option>
+          </select>
+          <button id="rollback-btn" class="btn btn-sm btn-warning" disabled>回滚到此版本</button>
+        </section>
+      </aside>
+
+      <!-- 地图容器 -->
+      <div id="map-wrapper">
+        <!-- 面包屑导航 -->
+        <div id="breadcrumb-bar">
+          <div id="breadcrumb" class="breadcrumb"></div>
+        </div>
+        <!-- 返回上级按钮 -->
+        <button id="back-btn" class="back-btn" title="返回上级" style="display:none">
+          <span>&#x2190;</span> 返回
+        </button>
+        <!-- 楼层切换器 (建筑模式) -->
+        <div id="floor-switcher" class="floor-switcher" style="display:none">
+          <span class="floor-label">楼层:</span>
+          <div id="floor-buttons" class="floor-buttons"></div>
+        </div>
+        <div id="map-container"></div>
+        <div id="empty-state" class="empty-state">
+          <div class="empty-icon">&#x1F5FA;</div>
+          <h2>地图尚未构建</h2>
+          <p>通过 API 添加区域和地点，地图将自动更新</p>
+          <button id="empty-api-btn" class="btn btn-accent">查看 API 文档</button>
+        </div>
+      </div>
+
+      <!-- 右侧操作日志 -->
+      <aside id="log-panel">
+        <div class="panel-header">
+          <h3 class="panel-title">世界观演变日志</h3>
+          <button id="log-refresh" class="btn btn-icon btn-sm" title="刷新日志">&#x27F3;</button>
+        </div>
+        <div id="log-list" class="log-list">
+          <p class="empty-text">暂无操作记录</p>
+        </div>
+      </aside>
+    </main>
+
+    <!-- 底部状态栏 -->
+    <footer id="statusbar">
+      <div class="statusbar-left">
+        <span id="coord-display">坐标: --</span>
+        <span class="separator">|</span>
+        <span id="zoom-display">缩放: 100%</span>
+      </div>
+      <div class="statusbar-right">
+        <span id="last-update">最后更新: --</span>
+        <span class="separator">|</span>
+        <span id="server-status" class="status-dot status-online">&#x25CF; 在线</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- 地点详情弹窗 -->
+  <div id="detail-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <button class="modal-close" data-target="detail-modal">&times;</button>
+      <div id="detail-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- API 文档弹窗 -->
+  <div id="api-modal" class="modal-overlay hidden">
+    <div class="modal modal-large">
+      <button class="modal-close" data-target="api-modal">&times;</button>
+      <div id="api-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="/js/api-client.js?v9"></script>
+  <script src="/js/tile-config.js?v9"></script>
+  <script src="/js/tile-renderer.js?v9"></script>
+  <script src="/js/map-renderer.js?v12"></script>
+  <script src="/js/app.js?v9"></script>
+</body>
+</html>
