@@ -14,7 +14,7 @@ type Selection =
   | null;
 
 type Drag =
-  | { kind: 'pan'; x: number; y: number; moved: boolean }
+  | { kind: 'pan'; x: number; y: number; moved: boolean; selectOnClick: boolean }
   | { kind: 'place'; id: string; originX: number; originY: number; start: Point; moved: boolean }
   | { kind: 'region'; id: string; origin: Polygon; start: Point; moved: boolean }
   | { kind: 'vertex'; id: string; index: number; origin: Polygon; start: Point; moved: boolean };
@@ -718,7 +718,7 @@ glCanvas.addEventListener('pointerdown', (event) => {
   const hit = pick(worldPoint);
   if (event.button === 1 || event.altKey || spacePanning) {
     event.preventDefault();
-    drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false };
+    drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false, selectOnClick: false };
     return;
   }
   const selectedRegionId = selection?.type === 'region' ? selection.id : null;
@@ -754,7 +754,7 @@ glCanvas.addEventListener('pointerdown', (event) => {
     selectedVertex = null;
     return;
   }
-  drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false };
+  drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false, selectOnClick: true };
   if (hit && !sameSelection(selection, hit)) selectedVertex = null;
   if (hit) selection = hit;
 });
@@ -800,6 +800,7 @@ glCanvas.addEventListener('pointerup', async (event) => {
   drag = null;
   if (!finished) return;
   if (!finished.moved) {
+    if (finished.kind === 'pan' && !finished.selectOnClick) return;
     const hit = finished.kind === 'vertex' ? { type: 'region' as const, id: finished.id } : pick(eventPoint(event));
     if (!sameSelection(selection, hit)) selectedVertex = null;
     selection = hit;
