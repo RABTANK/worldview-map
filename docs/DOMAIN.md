@@ -24,11 +24,33 @@
 | fill / stroke | `#RGB` 或 `#RRGGBB` |
 | sort_order | 同层排序 |
 
+Polygon 可由 3–64 个点组成，前端支持直接拖动顶点、沿边插入顶点，以及在至少保留 3 个点的前提下删除顶点。HTTP 与 MCP 都使用相同的 Polygon 结构，例如：
+
+```json
+{
+  "type": "Polygon",
+  "points": [
+    { "x": 40, "y": 120 },
+    { "x": 180, "y": 70 },
+    { "x": 310, "y": 105 },
+    { "x": 350, "y": 220 },
+    { "x": 210, "y": 290 },
+    { "x": 80, "y": 245 }
+  ]
+}
+```
+
 删除区域会同时删掉它自己的地点和室内楼层。若还有子区域，必须 `cascade=true`，并且 `confirm=true`。删除前自动做快照。
 
 ## places
 
 挂在某个区域上。`kind` 是 1–32 位的 `a-z0-9_-`，默认 `landmark`。同一区域里两点距离小于 `PLACE_CONFLICT_DISTANCE`（默认 8）会返回 `CONFLICT`，除非 `ignoreConflict=true`。范围查询必须同时给 `minX/minY/maxX/maxY`。
+
+## routes
+
+道路是独立于区域多边形和地点标记的实体。`region_id` 指定坐标所属的区域；`geometry` 是至少 2 个点的 `LineString`，坐标使用该区域的局部平面。`kind` 为 `road`、`trail`、`sea` 或 `custom`。`width` 是可选的局部坐标宽度（1–64），`style` 是可选的 `#RGB` / `#RRGGBB` 线色覆盖；未提供时由地图按 kind 决定外观。
+
+HTTP 与 MCP 通过同一 `WorldService` 读写道路。删除道路需要 `confirm=true`；删除区域时道路随所属区域及子层一并清理。路线数据包含在快照和回滚载荷中。
 
 ## indoor_floors / indoor_tiles
 
@@ -42,7 +64,7 @@ tile 整层替换。请求里没出现的格子就是空的。类型：
 
 ## snapshots
 
-载荷是当时的区域、地点、楼层、tile，**不含 API Key，也不含操作日志**。`reason` 为 `manual`，或 `auto:before_delete`、`auto:before_rollback`。
+载荷是当时的区域、地点、道路、楼层、tile，**不含 API Key，也不含操作日志**。旧快照没有 `routes` 时按空道路列表恢复。`reason` 为 `manual`，或 `auto:before_delete`、`auto:before_rollback`。
 
 默认策略：
 
@@ -63,4 +85,4 @@ tile 整层替换。请求里没出现的格子就是空的。类型：
 
 ## 迁移
 
-Schema 在 `src/db/schema.ts`，由 Drizzle Kit 生成，SQL 在 `drizzle/0000_init.sql`。语句顺序调整过：`regions` 必须先于引用它的 `places` 和 `indoor_floors`，否则 SQLite 在开启外键时无法建表。启动、seed、测试都会自动执行迁移。
+Schema 在 `src/db/schema.ts`，由 Drizzle Kit 生成，SQL 在 `drizzle/`。语句顺序调整过：`regions` 必须先于引用它的 `places`、`routes` 和 `indoor_floors`，否则 SQLite 在开启外键时无法建表。启动、seed、测试都会自动执行迁移。

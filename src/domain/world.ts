@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
 import { and, asc, desc, eq, isNull, like, or } from 'drizzle-orm';
-import { auditLogs, indoorFloors, indoorTiles, places, regions, snapshots } from '../db/schema.js';
-import { distance, translatePolygon } from '../shared/geom.js';
+import { auditLogs, indoorFloors, indoorTiles, places, regions, routes, snapshots } from '../db/schema.js';
+import { distance, translatePolygon, type LineString } from '../shared/geom.js';
 import { expectedParentLevel, LEVEL_LABEL, LEVELS, type RegionLevel } from '../shared/levels.js';
 import { isTileType, type TileType } from '../shared/tiles.js';
-import type { Actor, AuditEntry, Floor, IndoorView, MapView, Place, Region, SnapshotMeta, Tile } from '../shared/types.js';
+import type { Actor, AuditEntry, Floor, IndoorView, MapView, Place, Region, Route, RouteKind, SnapshotMeta, Tile } from '../shared/types.js';
 import type { DB } from './auth.js';
 import { hasScope } from './auth.js';
 import { AppError } from './errors.js';
@@ -15,9 +15,13 @@ import {
   normalizeKind,
   normalizeName,
   normalizeTags,
+  normalizeRouteKind,
+  normalizeRouteStyle,
+  normalizeRouteWidth,
   nowIso,
   requireCoord,
   requireId,
+  requireLineString,
   requireLevel,
   requirePolygon,
 } from './validate.js';
@@ -26,10 +30,12 @@ type RegionRow = typeof regions.$inferSelect;
 type PlaceRow = typeof places.$inferSelect;
 type FloorRow = typeof indoorFloors.$inferSelect;
 type TileRow = typeof indoorTiles.$inferSelect;
+type RouteRow = typeof routes.$inferSelect;
 
 type SnapshotPayload = {
   regions: Region[];
   places: Place[];
+  routes?: Route[];
   floors: Floor[];
   tiles: Tile[];
 };
@@ -80,6 +86,25 @@ export type PlacePatch = {
   x?: number;
   y?: number;
   ignoreConflict?: boolean;
+};
+
+export type RouteInput = {
+  id?: string;
+  regionId: string;
+  name: string;
+  kind?: string;
+  geometry: unknown;
+  width?: number | null;
+  style?: string | null;
+};
+
+export type RoutePatch = {
+  regionId?: string;
+  name?: string;
+  kind?: string;
+  geometry?: unknown;
+  width?: number | null;
+  style?: string | null;
 };
 
 export type FloorInput = {
@@ -170,6 +195,20 @@ function toTile(row: TileRow): Tile {
     y: row.y,
     tileType,
     meta: parseJson<Record<string, unknown>>(row.meta, {}),
+  };
+}
+
+function toRoute(row: RouteRow): Route {
+  return {
+    id: row.id,
+    regionId: row.regionId,
+    name: row.name,
+    kind: normalizeRouteKind(row.kind),
+    geometry: requireLineString(parseJson<LineString | null>(row.geometry, null)),
+    width: row.width,
+    style: row.style,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -284,6 +323,84 @@ export class WorldService {
     remove();
     this.audit(actor, 'region.delete', 'region', id, { name: region.name, cascade: options.cascade }, snapshot.id);
     return { snapshotId: snapshot.id };
+  }
+
+  listRoutes(filter: { regionId?: string; q?: string } = {}): Route[] {
+    let rows = filter.regionId
+      ? this.db.select().from(routes).where(eq(routes.regionId, filter.regionId)).all()
+      : this.db.select().from(routes).all();
+    if (filter.q) {
+      const needle = filter.q.trim().toLowerCase();
+      rows = rows.filter((row) => row.name.toLowerCase().includes(needle) || row.kind.includes(needle));
+    }
+    return rows.map(toRoute).sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  }
+
+  getRoute(id: string): Route {
+    const row = this.db.select().from(routes).where(eq(routes.id, id)).get();
+    if (!row) throw new AppError(404, 'NOT_FOUND', '道路不存在');
+    return toRoute(row);
+  }
+
+  createRoute(input: RouteInput, actor: Actor): Route {
+    const id = requireId(input.id);
+    if (this.db.select().from(routes).where(eq(routes.id, id)).get()) {
+      throw new AppError(409, 'CONFLICT', '道路 id 已存在');
+    }
+    this.getRegion(input.regionId);
+    const timestamp = nowIso();
+    const route: Route = {
+      id,
+      regionId: input.regionId,
+      name: normalizeName(input.name),
+      kind: normalizeRouteKind(input.kind),
+      geometry: requireLineString(input.geometry),
+      width: normalizeRouteWidth(input.width),
+      style: normalizeRouteStyle(input.style),
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    this.insertRoute(route);
+    this.audit(actor, 'route.create', 'route', route.id, { name: route.name, kind: route.kind });
+    return route;
+  }
+
+  updateRoute(id: string, patch: RoutePatch, actor: Actor): Route {
+    if (Object.keys(patch).length === 0) throw new AppError(400, 'VALIDATION', '至少提供一个字段');
+    const current = this.getRoute(id);
+    if (patch.regionId !== undefined) this.getRegion(patch.regionId);
+    const next: Route = {
+      ...current,
+      regionId: patch.regionId ?? current.regionId,
+      name: patch.name == null ? current.name : normalizeName(patch.name),
+      kind: patch.kind == null ? current.kind : normalizeRouteKind(patch.kind),
+      geometry: patch.geometry == null ? current.geometry : requireLineString(patch.geometry),
+      width: patch.width === undefined ? current.width : normalizeRouteWidth(patch.width),
+      style: patch.style === undefined ? current.style : normalizeRouteStyle(patch.style),
+      updatedAt: nowIso(),
+    };
+    this.db
+      .update(routes)
+      .set({
+        regionId: next.regionId,
+        name: next.name,
+        kind: next.kind,
+        geometry: JSON.stringify(next.geometry),
+        width: next.width,
+        style: next.style,
+        updatedAt: next.updatedAt,
+      })
+      .where(eq(routes.id, id))
+      .run();
+    this.audit(actor, 'route.update', 'route', id, { name: next.name, kind: next.kind });
+    return next;
+  }
+
+  deleteRoute(id: string, confirm: boolean, actor: Actor): void {
+    if (!confirm) throw new AppError(400, 'CONFIRMATION_REQUIRED', '删除道路需要 confirm=true');
+    const route = this.getRoute(id);
+    this.db.delete(routes).where(eq(routes.id, id)).run();
+    this.audit(actor, 'route.delete', 'route', id, { name: route.name, regionId: route.regionId });
   }
 
   listPlaces(filter: {
@@ -557,21 +674,24 @@ export class WorldService {
         breadcrumb: [],
         children,
         places: [],
+        routes: [],
         indoor: null,
-        summary: this.summarize(null, children, [], null),
+        summary: this.summarize(null, children, [], [], null),
       };
     }
     const region = this.getRegion(regionId);
     const children = region.level === 'building' ? [] : this.listChildren(region.id);
     const placeRows = this.listPlaces({ regionId: region.id });
+    const routeRows = this.listRoutes({ regionId: region.id });
     const indoor = region.level === 'building' ? this.indoorView(region.id, floorId ?? null) : null;
     return {
       region,
       breadcrumb: this.breadcrumb(region),
       children,
       places: placeRows,
+      routes: routeRows,
       indoor,
-      summary: this.summarize(region, children, placeRows, indoor),
+      summary: this.summarize(region, children, placeRows, routeRows, indoor),
     };
   }
 
@@ -645,7 +765,7 @@ export class WorldService {
       reason: row.reason,
       actorKeyId: row.actorKeyId,
       createdAt: row.createdAt,
-      payload: parseJson<SnapshotPayload>(row.payload, { regions: [], places: [], floors: [], tiles: [] }),
+      payload: parseJson<SnapshotPayload>(row.payload, { regions: [], places: [], routes: [], floors: [], tiles: [] }),
     };
   }
 
@@ -698,7 +818,7 @@ export class WorldService {
     return { floors, activeFloor: this.getFloor(selected.id) };
   }
 
-  private summarize(region: Region | null, children: Region[], placeRows: Place[], indoor: IndoorView | null): string {
+  private summarize(region: Region | null, children: Region[], placeRows: Place[], routeRows: Route[], indoor: IndoorView | null): string {
     const head = region ? `${region.name}（${LEVEL_LABEL[region.level]}）` : '世界根';
     const childText = children.length ? children.map((child) => child.name).join('、') : '无';
     const placeText = placeRows.length ? placeRows.map((place) => place.name).join('、') : '无';
@@ -706,6 +826,7 @@ export class WorldService {
       head,
       `直接子区域 ${children.length} 个：${childText}`,
       `地点 ${placeRows.length} 个：${placeText}`,
+      `道路 ${routeRows.length} 条：${routeRows.length ? routeRows.map((route) => route.name).join('、') : '无'}`,
     ];
     if (indoor) {
       lines.push(
@@ -823,6 +944,7 @@ export class WorldService {
     }
     this.db.delete(indoorFloors).where(eq(indoorFloors.regionId, id)).run();
     this.db.delete(places).where(eq(places.regionId, id)).run();
+    this.db.delete(routes).where(eq(routes.regionId, id)).run();
     this.db.delete(regions).where(eq(regions.id, id)).run();
   }
 
@@ -830,6 +952,7 @@ export class WorldService {
     return {
       regions: this.db.select().from(regions).all().map(toRegion),
       places: this.db.select().from(places).all().map(toPlace),
+      routes: this.db.select().from(routes).all().map(toRoute),
       floors: this.db.select().from(indoorFloors).all().map(toFloor),
       tiles: this.db.select().from(indoorTiles).all().map(toTile),
     };
@@ -842,6 +965,7 @@ export class WorldService {
     const run = this.sqlite.transaction(() => {
       this.db.delete(indoorTiles).run();
       this.db.delete(indoorFloors).run();
+      this.db.delete(routes).run();
       this.db.delete(places).run();
       for (const level of [...LEVELS].reverse()) {
         this.db.delete(regions).where(eq(regions.level, level)).run();
@@ -850,6 +974,7 @@ export class WorldService {
         for (const region of payload.regions.filter((item) => item.level === level)) this.insertRegion(region);
       }
       for (const place of payload.places) this.insertPlace(place);
+      for (const route of payload.routes ?? []) this.insertRoute(route);
       for (const floor of payload.floors ?? []) this.insertFloor(floor);
       for (const tile of payload.tiles ?? []) this.insertTile(tile);
     });
@@ -898,6 +1023,23 @@ export class WorldService {
       .values({
         ...place,
         tags: JSON.stringify(place.tags),
+      })
+      .run();
+  }
+
+  private insertRoute(route: Route): void {
+    this.db
+      .insert(routes)
+      .values({
+        id: route.id,
+        regionId: route.regionId,
+        name: route.name,
+        kind: route.kind satisfies RouteKind,
+        geometry: JSON.stringify(route.geometry),
+        width: route.width,
+        style: route.style,
+        createdAt: route.createdAt,
+        updatedAt: route.updatedAt,
       })
       .run();
   }

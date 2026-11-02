@@ -18,7 +18,10 @@
       <div class="top-actions">
         <span id="who" class="who"></span>
         <button type="button" id="refresh">刷新</button>
+        <button type="button" id="zoom-out" aria-label="缩小">−</button>
         <button type="button" id="fit">适配画面</button>
+        <button type="button" id="zoom-in" aria-label="放大">+</button>
+        <button type="button" id="grid-toggle">隐藏网格</button>
         <button type="button" id="up">返回上级</button>
         <button type="button" id="key-button">API Key</button>
         <a class="text-link" href="/docs">API 文档</a>
@@ -26,7 +29,7 @@
     </header>
     <main class="workspace">
       <section class="stage" id="stage">
-        <canvas id="gl"></canvas>
+        <canvas id="gl" tabindex="0" aria-label="世界观地图画布"></canvas>
         <canvas id="labels"></canvas>
         <p id="hint" class="hint"></p>
       </section>

@@ -51,13 +51,13 @@ npm run seed -- --reset-keys   # 吊销现有钥匙并重新打印
 ```
 src/shared        坐标、层级、tile 类型（前后端共用）
 src/db            Drizzle schema + SQL 迁移
-src/domain        区域 / 地点 / 室内 / 快照 / API Key
+src/domain        区域 / 地点 / 道路 / 室内 / 快照 / API Key
 src/http          Fastify 路由，只做校验和鉴权
 src/mcp           MCP 工具，调用同一套 WorldService
 web               Vite + WebGL2 画布
 ```
 
-迁移用 **Drizzle ORM + drizzle-kit**，SQL 在 `drizzle/0000_init.sql`。运行时用 `better-sqlite3`，文件库开启 WAL，所以 HTTP 进程和 MCP 进程可以同时开着。
+迁移用 **Drizzle ORM + drizzle-kit**，SQL 在 `drizzle/`。运行时用 `better-sqlite3`，文件库开启 WAL，所以 HTTP 进程和 MCP 进程可以同时开着。
 
 不使用 ECharts、Leaflet、MapLibre。底图不是真实地理。
 
@@ -65,9 +65,9 @@ web               Vite + WebGL2 画布
 
 `continent → city → district → building_group → building`
 
-每一层的多边形和地点都写在**该层自己的局部平面**里，y 向下，常用范围大约 0–1000，不是经纬度。画布只画当前区域的直接子级和直接地点，避免上下层叠在一起抢点击。进入建筑后改画室内格子，退出回到建筑群。
+每一层的多边形、地点和道路都写在**该层自己的局部平面**里，y 向下，常用范围大约 0–1000，不是经纬度。画布只画当前区域的直接子级、直接地点和道路，避免上下层叠在一起抢点击。进入建筑后改画室内格子，退出回到建筑群。
 
-人在网页上可以改名称、描述、标签和地点坐标，也可以拖动地点，或按住 Shift 拖动区域做整体平移。第一期不做逐顶点编辑。
+人在网页上可以改名称、描述、标签和地点坐标，也可以拖动地点、编辑区域顶点或按住 Shift 拖动区域整体平移。地图支持道路图层、可见缩放/适配控件、空格拖移和可开关网格。
 
 ## 文档
 

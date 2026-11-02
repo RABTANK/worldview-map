@@ -3,9 +3,10 @@ import { worldToClipMatrix, type Camera } from '../../src/shared/camera.js';
 import { hexToRgba } from '../../src/shared/color.js';
 import type { Point } from '../../src/shared/geom.js';
 
-export type DrawPolygon = { points: Point[]; fill: string; stroke: string };
+export type DrawPolygon = { points: Point[]; fill: string; stroke: string; strokeWidth?: number };
 export type DrawPlace = { x: number; y: number; fill: string };
 export type DrawTile = { x: number; y: number; color: string };
+export type DrawRoute = { points: Point[]; color: string; width: number };
 
 const VERT = `#version 300 es
 layout(location=0) in vec2 a_pos;
@@ -69,6 +70,7 @@ export class MapGl {
     width: number;
     height: number;
     polygons: DrawPolygon[];
+    routes: DrawRoute[];
     places: DrawPlace[];
     tiles: DrawTile[];
     grid: { minX: number; minY: number; maxX: number; maxY: number; step: number } | null;
@@ -83,6 +85,29 @@ export class MapGl {
     const lines: number[] = [];
     const push = (target: number[], x: number, y: number, color: [number, number, number, number]) => {
       target.push(x, y, color[0], color[1], color[2], color[3]);
+    };
+    const pushStrokeSegment = (target: number[], a: Point, b: Point, halfWidth: number, color: [number, number, number, number]) => {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy);
+      if (length < 0.001) return;
+      const nx = (-dy / length) * halfWidth;
+      const ny = (dx / length) * halfWidth;
+      const a1 = { x: a.x + nx, y: a.y + ny };
+      const a2 = { x: a.x - nx, y: a.y - ny };
+      const b1 = { x: b.x + nx, y: b.y + ny };
+      const b2 = { x: b.x - nx, y: b.y - ny };
+      for (const point of [a1, b1, b2, a1, b2, a2]) push(target, point.x, point.y, color);
+    };
+    const pushRoundJoin = (target: number[], point: Point, radius: number, color: [number, number, number, number]) => {
+      const segments = 8;
+      for (let i = 0; i < segments; i += 1) {
+        const first = (i / segments) * Math.PI * 2;
+        const second = ((i + 1) / segments) * Math.PI * 2;
+        push(target, point.x, point.y, color);
+        push(target, point.x + Math.cos(first) * radius, point.y + Math.sin(first) * radius, color);
+        push(target, point.x + Math.cos(second) * radius, point.y + Math.sin(second) * radius, color);
+      }
     };
     if (options.grid) {
       const gridColor: [number, number, number, number] = [0.35, 0.3, 0.24, 0.35];
@@ -122,9 +147,16 @@ export class MapGl {
       for (let i = 0; i < polygon.points.length; i += 1) {
         const a = polygon.points[i];
         const b = polygon.points[(i + 1) % polygon.points.length];
-        push(lines, a.x, a.y, stroke);
-        push(lines, b.x, b.y, stroke);
+        pushStrokeSegment(triangles, a, b, (polygon.strokeWidth ?? 2) / Math.max(options.camera.zoom, 0.001) / 2, stroke);
       }
+    }
+    for (const route of options.routes) {
+      const color = hexToRgba(route.color, 1);
+      const halfWidth = Math.max(1, route.width) / 2;
+      for (let i = 0; i < route.points.length - 1; i += 1) {
+        pushStrokeSegment(triangles, route.points[i], route.points[i + 1], halfWidth, color);
+      }
+      for (const point of route.points) pushRoundJoin(triangles, point, halfWidth, color);
     }
     for (const place of options.places) {
       const color = hexToRgba(place.fill, 1);

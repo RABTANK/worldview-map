@@ -1,6 +1,6 @@
-import { isFiniteCoord, parsePolygon, type Polygon } from '../shared/geom.js';
+import { isFiniteCoord, parseLineString, parsePolygon, type LineString, type Polygon } from '../shared/geom.js';
 import { isRegionLevel, type RegionLevel } from '../shared/levels.js';
-import { SCOPES, type Scope } from '../shared/types.js';
+import { ROUTE_KINDS, SCOPES, type RouteKind, type Scope } from '../shared/types.js';
 import { AppError } from './errors.js';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,80}$/;
@@ -63,6 +63,33 @@ export function requirePolygon(input: unknown): Polygon {
   const polygon = parsePolygon(input);
   if (!polygon) throw new AppError(400, 'VALIDATION', 'geometry 需为至少 3 个点的 Polygon');
   return polygon;
+}
+
+export function requireLineString(input: unknown): LineString {
+  const line = parseLineString(input);
+  if (!line) throw new AppError(400, 'VALIDATION', 'geometry 需为 2–256 个点的 LineString');
+  return line;
+}
+
+export function normalizeRouteKind(kind: string | undefined): RouteKind {
+  const value = kind ?? 'road';
+  if (!(ROUTE_KINDS as readonly string[]).includes(value)) {
+    throw new AppError(400, 'VALIDATION', 'kind 必须是 road/trail/sea/custom');
+  }
+  return value as RouteKind;
+}
+
+export function normalizeRouteWidth(value: number | null | undefined): number | null {
+  if (value == null) return null;
+  if (!Number.isInteger(value) || value < 1 || value > 64) {
+    throw new AppError(400, 'VALIDATION', 'width 需为 1–64 的局部坐标单位');
+  }
+  return value;
+}
+
+export function normalizeRouteStyle(value: string | null | undefined): string | null {
+  if (value == null || value === '') return null;
+  return normalizeColor(value, '#d9b66f');
 }
 
 export function requireLevel(value: string): RegionLevel {

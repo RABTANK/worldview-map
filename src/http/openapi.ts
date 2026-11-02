@@ -12,6 +12,7 @@ export const openapi = {
     { name: 'map' },
     { name: 'regions' },
     { name: 'places' },
+    { name: 'routes' },
     { name: 'indoor' },
     { name: 'snapshots' },
     { name: 'auth' },
@@ -47,6 +48,7 @@ export const openapi = {
           points: {
             type: 'array',
             minItems: 3,
+            maxItems: 64,
             items: {
               type: 'object',
               required: ['x', 'y'],
@@ -89,6 +91,75 @@ export const openapi = {
           updatedAt: { type: 'string' },
         },
       },
+      LineString: {
+        type: 'object',
+        required: ['type', 'points'],
+        properties: {
+          type: { type: 'string', enum: ['LineString'] },
+          points: {
+            type: 'array',
+            minItems: 2,
+            maxItems: 256,
+            items: {
+              type: 'object',
+              required: ['x', 'y'],
+              properties: { x: { type: 'number' }, y: { type: 'number' } },
+            },
+          },
+        },
+      },
+      Route: {
+        type: 'object',
+        required: ['id', 'regionId', 'name', 'kind', 'geometry', 'createdAt', 'updatedAt'],
+        properties: {
+          id: { type: 'string' },
+          regionId: { type: 'string' },
+          name: { type: 'string' },
+          kind: { type: 'string', enum: ['road', 'trail', 'sea', 'custom'] },
+          geometry: { $ref: '#/components/schemas/LineString' },
+          width: { type: 'integer', nullable: true, minimum: 1, maximum: 64, description: '局部坐标单位' },
+          style: { type: 'string', nullable: true, description: '可选的 #RGB / #RRGGBB 线色覆盖' },
+          createdAt: { type: 'string' },
+          updatedAt: { type: 'string' },
+        },
+      },
+      RouteInput: {
+        type: 'object',
+        required: ['regionId', 'name', 'geometry'],
+        properties: {
+          id: { type: 'string', description: '可选 id；省略时自动生成' },
+          regionId: { type: 'string', description: '路线所在的区域坐标系' },
+          name: { type: 'string' },
+          kind: { type: 'string', enum: ['road', 'trail', 'sea', 'custom'], default: 'road' },
+          geometry: { $ref: '#/components/schemas/LineString' },
+          width: { type: 'integer', nullable: true, minimum: 1, maximum: 64, description: '局部坐标单位；null 使用 kind 默认值' },
+          style: { type: 'string', nullable: true, pattern: '^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$', description: '线色覆盖；null 清除覆盖' },
+        },
+      },
+      RoutePatch: {
+        type: 'object',
+        minProperties: 1,
+        properties: {
+          regionId: { type: 'string', description: '路线所在的区域坐标系' },
+          name: { type: 'string' },
+          kind: { type: 'string', enum: ['road', 'trail', 'sea', 'custom'] },
+          geometry: { $ref: '#/components/schemas/LineString' },
+          width: { type: 'integer', nullable: true, minimum: 1, maximum: 64, description: '局部坐标单位；null 使用 kind 默认值' },
+          style: { type: 'string', nullable: true, pattern: '^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$', description: '线色覆盖；null 清除覆盖' },
+        },
+      },
+      RouteList: {
+        type: 'object',
+        required: ['routes'],
+        properties: {
+          routes: { type: 'array', items: { $ref: '#/components/schemas/Route' } },
+        },
+      },
+      OperationResult: {
+        type: 'object',
+        required: ['ok'],
+        properties: { ok: { type: 'boolean', enum: [true] } },
+      },
     },
   },
   security: [{ bearerAuth: [] }, { apiKeyHeader: [] }],
@@ -117,7 +188,7 @@ export const openapi = {
     '/api/map/view': {
       get: {
         tags: ['map'],
-        summary: '当前视图：只含活跃区域的直接子级、地点，建筑则含室内楼层',
+        summary: '当前视图：只含活跃区域的直接子级、地点和道路，建筑则含室内楼层',
         parameters: [
           { name: 'regionId', in: 'query', schema: { type: 'string' } },
           { name: 'floorId', in: 'query', schema: { type: 'string' } },
@@ -191,6 +262,64 @@ export const openapi = {
           { name: 'confirm', in: 'query', schema: { type: 'boolean' } },
         ],
         responses: { '200': { description: '已删除' } },
+      },
+    },
+    '/api/routes': {
+      get: {
+        tags: ['routes'],
+        summary: '道路列表，支持按所属区域和名称/类型过滤',
+        parameters: [
+          { name: 'regionId', in: 'query', schema: { type: 'string' } },
+          { name: 'q', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: '道路列表', content: { 'application/json': { schema: { $ref: '#/components/schemas/RouteList' } } } },
+        },
+      },
+      post: {
+        tags: ['routes'],
+        summary: '创建道路，geometry 为至少 2 个点的 LineString',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/RouteInput' } } },
+        },
+        responses: {
+          '201': { description: '已创建', content: { 'application/json': { schema: { $ref: '#/components/schemas/Route' } } } },
+          '400': { description: '校验失败', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+    },
+    '/api/routes/{id}': {
+      get: {
+        tags: ['routes'],
+        summary: '读取道路',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        responses: { '200': { description: '道路', content: { 'application/json': { schema: { $ref: '#/components/schemas/Route' } } } } },
+      },
+      patch: {
+        tags: ['routes'],
+        summary: '更新道路',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/RoutePatch' } } },
+        },
+        responses: {
+          '200': { description: '已更新', content: { 'application/json': { schema: { $ref: '#/components/schemas/Route' } } } },
+          '400': { description: '校验失败', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
+      },
+      delete: {
+        tags: ['routes'],
+        summary: '删除道路，需要 confirm=true',
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+          { name: 'confirm', in: 'query', schema: { type: 'boolean' } },
+        ],
+        responses: {
+          '200': { description: '已删除', content: { 'application/json': { schema: { $ref: '#/components/schemas/OperationResult' } } } },
+          '400': { description: '需要 confirm=true 或参数无效', content: { 'application/json': { schema: { $ref: '#/components/schemas/Error' } } } },
+        },
       },
     },
     '/api/search': {

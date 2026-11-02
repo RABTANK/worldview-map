@@ -51,6 +51,24 @@ export const places = sqliteTable(
   (table) => [index('places_region_idx').on(table.regionId)],
 );
 
+export const routes = sqliteTable(
+  'routes',
+  {
+    id: text('id').primaryKey(),
+    regionId: text('region_id')
+      .notNull()
+      .references(() => regions.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    kind: text('kind').notNull(),
+    geometry: text('geometry').notNull(),
+    width: integer('width'),
+    style: text('style'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (table) => [index('routes_region_idx').on(table.regionId), index('routes_kind_idx').on(table.kind)],
+);
+
 export const indoorFloors = sqliteTable(
   'indoor_floors',
   {
