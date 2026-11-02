@@ -1,0 +1,198 @@
+:root {
+  color-scheme: dark;
+  --bg: #14110e;
+  --panel: #241c16;
+  --panel-2: #2e261e;
+  --ink: #f4ecdf;
+  --muted: #b4a694;
+  --line: #4a3d32;
+  --brass: #e0b15a;
+  --sea: #7dbaa8;
+  --danger: #e07a5f;
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+  font-family: "Iowan Old Style", Palatino, "Palatino Linotype", "Songti SC", "Noto Serif SC", serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(224, 177, 90, 0.14), transparent 55%),
+    linear-gradient(180deg, #1b1612 0%, var(--bg) 40%);
+  color: var(--ink);
+}
+
+button, input, textarea, a {
+  font: inherit;
+  color: inherit;
+}
+
+button, .text-link {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+button:hover, .text-link:hover { border-color: var(--brass); color: var(--brass); }
+
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.top {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(20, 17, 14, 0.9);
+}
+
+.brand { display: flex; gap: 0.7rem; align-items: center; min-width: 12rem; }
+.brand strong { display: block; letter-spacing: 0.08em; }
+.brand small { color: var(--muted); }
+
+.mark {
+  width: 2.4rem;
+  height: 2.4rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--brass);
+  border-radius: 40% 60% 50% 50%;
+  color: var(--brass);
+  background: #2a2118;
+}
+
+#crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  flex: 1;
+}
+
+#crumbs button { border-radius: 0.4rem; }
+
+.top-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.who { color: var(--muted); font-size: 0.85rem; }
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  height: calc(100vh - 74px);
+}
+
+.stage {
+  position: relative;
+  min-width: 0;
+  min-height: 320px;
+  background:
+    radial-gradient(circle at 50% 40%, rgba(125, 186, 168, 0.05), transparent 42%),
+    #100e0c;
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.45);
+}
+
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#gl { touch-action: none; }
+#labels { pointer-events: none; }
+
+.hint {
+  position: absolute;
+  left: 0.8rem;
+  bottom: 0.7rem;
+  margin: 0;
+  max-width: 42rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
+
+.panel {
+  min-width: 0;
+  overflow: auto;
+  padding: 0.9rem 1rem 2rem;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.panel h2 {
+  margin: 0.8rem 0 0.45rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--brass);
+}
+
+.stack { display: flex; flex-direction: column; gap: 0.35rem; }
+
+.item {
+  text-align: left;
+  border-radius: 0.7rem;
+  padding: 0.45rem 0.65rem;
+  background: #1b1612;
+}
+
+.item small { display: block; color: var(--muted); }
+
+.item.active { border-color: var(--sea); }
+
+label { display: block; margin: 0.45rem 0; font-size: 0.85rem; color: var(--muted); }
+
+input, textarea, select {
+  width: 100%;
+  margin-top: 0.2rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--line);
+  background: #16130f;
+}
+
+textarea { min-height: 4.5rem; resize: vertical; }
+
+.row { display: flex; gap: 0.4rem; margin-top: 0.6rem; flex-wrap: wrap; }
+
+.palette { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+
+.swatch {
+  width: auto;
+  border-radius: 0.5rem;
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.swatch i {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 0.2rem;
+  display: inline-block;
+}
+
+.status { min-height: 1.2rem; color: var(--sea); }
+.status.error { color: var(--danger); }
+
+dialog {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 1rem;
+  max-width: 32rem;
+  box-shadow: var(--shadow);
+}
+
+dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+
+.empty { color: var(--muted); margin: 0.2rem 0; }
+
+@media (max-width: 960px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(280px, 52vh) auto;
+    height: auto;
+  }
+  .panel { border-left: 0; border-top: 1px solid var(--line); }
+  .stage { min-height: 52vh; }
+}

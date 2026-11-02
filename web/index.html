@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>世界观地图</title>
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="mark" aria-hidden="true">折</span>
+        <div>
+          <strong>世界观地图</strong>
+          <small>虚构平面 · 局部坐标</small>
+        </div>
+      </div>
+      <nav id="crumbs" aria-label="层级"></nav>
+      <div class="top-actions">
+        <span id="who" class="who"></span>
+        <button type="button" id="refresh">刷新</button>
+        <button type="button" id="fit">适配画面</button>
+        <button type="button" id="up">返回上级</button>
+        <button type="button" id="key-button">API Key</button>
+        <a class="text-link" href="/docs">API 文档</a>
+      </div>
+    </header>
+    <main class="workspace">
+      <section class="stage" id="stage">
+        <canvas id="gl"></canvas>
+        <canvas id="labels"></canvas>
+        <p id="hint" class="hint"></p>
+      </section>
+      <aside class="panel">
+        <section>
+          <h2>当前区域</h2>
+          <form id="current-form"></form>
+        </section>
+        <section>
+          <h2>直接子级</h2>
+          <div id="children" class="stack"></div>
+        </section>
+        <section>
+          <h2>地点</h2>
+          <div id="places" class="stack"></div>
+        </section>
+        <section>
+          <h2>选中</h2>
+          <form id="editor"></form>
+          <div id="palette" class="palette" hidden></div>
+        </section>
+        <section id="indoor-section">
+          <h2>室内楼层</h2>
+          <div id="floors"></div>
+        </section>
+        <p id="status" class="status" role="status"></p>
+      </aside>
+    </main>
+    <dialog id="key-dialog">
+      <form method="dialog" id="key-form">
+        <h2>API Key</h2>
+        <p>查看需要 read，保存校正需要 write。明文只在 <code>npm run seed</code> 或 <code>npm run key:create</code> 时出现一次，请粘贴到这里。它只留在这个标签页的 sessionStorage。</p>
+        <input id="key-input" type="password" autocomplete="off" placeholder="wm_..." />
+        <div class="row">
+          <button type="submit" value="save">保存到标签页</button>
+          <button type="button" id="key-clear">清除</button>
+          <button type="button" id="key-close">关闭</button>
+        </div>
+      </form>
+    </dialog>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
