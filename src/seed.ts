@@ -452,7 +452,7 @@ function ensureKeys(reset: boolean): void {
     }
     const specs = [
       ['viewer', ['read']],
-      ['editor', ['read', 'write']],
+      ['editor', ['read', 'write', 'delete']],
       ['admin', ['read', 'write', 'delete', 'admin']],
     ] as const;
     console.log('已创建 API Key。明文只出现这一次，请立刻复制。数据库不保存明文：');

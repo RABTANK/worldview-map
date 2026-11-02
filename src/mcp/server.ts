@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { hasScope } from '../domain/auth.js';
 import { AppError } from '../domain/errors.js';
+import type { PlacePatch } from '../domain/world.js';
 import { RateLimiter } from '../domain/rate-limit.js';
 import type { Actor, Scope } from '../shared/types.js';
 import type { Runtime } from '../runtime.js';
@@ -13,11 +14,14 @@ export const MCP_TOOL_NAMES = [
   'map_update_region',
   'map_delete_region',
   'map_list_locations',
+  'map_get_location',
   'map_upsert_location',
+  'map_update_location',
   'map_delete_location',
   'map_get_context',
   'map_search',
   'map_list_floors',
+  'map_get_floor',
   'map_upsert_floor',
   'map_set_tiles',
   'map_delete_floor',
@@ -32,6 +36,40 @@ const polygonSchema = z.object({
 });
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
+
+const placeFields = {
+  regionId: z.string().optional().describe('地点所属区域'),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+  kind: z.string().optional().describe('小写字母、数字、下划线或连字符，默认 landmark'),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  ignoreConflict: z.boolean().optional().describe('为 true 时允许和附近地点靠得很近'),
+};
+
+function placePatch(args: Record<string, unknown>): PlacePatch {
+  const patch: PlacePatch = {};
+  if (typeof args.regionId === 'string') patch.regionId = args.regionId;
+  if (typeof args.name === 'string') patch.name = args.name;
+  if (typeof args.description === 'string') patch.description = args.description;
+  if (Array.isArray(args.tags)) patch.tags = args.tags.map(String);
+  if (typeof args.kind === 'string') patch.kind = args.kind;
+  if (typeof args.x === 'number') patch.x = args.x;
+  if (typeof args.y === 'number') patch.y = args.y;
+  if (typeof args.ignoreConflict === 'boolean') patch.ignoreConflict = args.ignoreConflict;
+  return patch;
+}
+
+function placeExists(world: Runtime['world'], id: string): boolean {
+  try {
+    world.getPlace(id);
+    return true;
+  } catch (error) {
+    if (error instanceof AppError && error.status === 404) return false;
+    throw error;
+  }
+}
 
 export function createMcpServer(runtime: Runtime, getActor: () => Actor, limiter: RateLimiter): McpServer {
   const server = new McpServer({ name: 'worldview-map', version: '3.0.0' });
@@ -167,25 +205,52 @@ export function createMcpServer(runtime: Runtime, getActor: () => Actor, limiter
   );
 
   server.registerTool(
+    'map_get_location',
+    {
+      title: '读取地点',
+      description: '按 id 读取一个地点。需要 read。',
+      inputSchema: { id: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    wrap('read', (_actor, args) => world.getPlace(String(args.id))),
+  );
+
+  server.registerTool(
     'map_upsert_location',
     {
       title: '创建或更新地点',
       description:
-        '提供已存在的 id 则更新，否则创建。同一区域里距离小于阈值会返回 CONFLICT，除非 ignoreConflict=true。需要 write。',
-      inputSchema: {
-        id: z.string().optional(),
-        regionId: z.string(),
-        name: z.string(),
-        description: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-        kind: z.string().optional(),
-        x: z.number(),
-        y: z.number(),
-        ignoreConflict: z.boolean().optional(),
-      },
+        '增：不带已有 id 时必须给 regionId、name、x、y。改：id 已存在时只传要改的字段。同一区域里距离过近会 CONFLICT，除非 ignoreConflict=true。需要 write。写入后读接口立即可见。',
+      inputSchema: { id: z.string().optional(), ...placeFields },
       annotations: { readOnlyHint: false, idempotentHint: true },
     },
-    wrap('write', (actor, args) => world.upsertPlace(args as never, actor)),
+    wrap('write', (actor, args) => {
+      const id = typeof args.id === 'string' ? args.id : undefined;
+      const patch = placePatch(args);
+      if (id && placeExists(world, id)) {
+        if (Object.keys(patch).length === 0) throw new AppError(400, 'VALIDATION', '更新地点至少提供一个字段');
+        return world.updatePlace(id, patch, actor);
+      }
+      if (patch.regionId == null || patch.name == null || patch.x == null || patch.y == null) {
+        throw new AppError(400, 'VALIDATION', '新建地点需要 regionId、name、x、y');
+      }
+      return world.createPlace({ id, regionId: patch.regionId, name: patch.name, description: patch.description, tags: patch.tags, kind: patch.kind, x: patch.x, y: patch.y, ignoreConflict: patch.ignoreConflict }, actor);
+    }),
+  );
+
+  server.registerTool(
+    'map_update_location',
+    {
+      title: '更新地点',
+      description: '按 id 局部更新地点的名称、描述、标签、类型或坐标。未提供的字段保持原值。需要 write。',
+      inputSchema: { id: z.string(), ...placeFields },
+      annotations: { readOnlyHint: false, idempotentHint: true },
+    },
+    wrap('write', (actor, args) => {
+      const patch = placePatch(args);
+      if (Object.keys(patch).length === 0) throw new AppError(400, 'VALIDATION', '更新地点至少提供一个字段');
+      return world.updatePlace(String(args.id), patch, actor);
+    }),
   );
 
   server.registerTool(
@@ -237,6 +302,17 @@ export function createMcpServer(runtime: Runtime, getActor: () => Actor, limiter
       annotations: { readOnlyHint: true },
     },
     wrap('read', (_actor, args) => ({ floors: world.listFloors(String(args.buildingId)) })),
+  );
+
+  server.registerTool(
+    'map_get_floor',
+    {
+      title: '读取室内楼层',
+      description: '读取一层及其全部 tile。需要 read。',
+      inputSchema: { id: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    wrap('read', (_actor, args) => world.getFloor(String(args.id))),
   );
 
   server.registerTool(

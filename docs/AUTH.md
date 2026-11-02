@@ -15,7 +15,7 @@ X-API-Key: wm_...
 
 ```bash
 npm run seed                 # 库里还没有钥匙时打印 viewer / editor / admin
-npm run key:create -- editor read,write
+npm run key:create -- editor read,write,delete
 npm run seed -- --reset-keys # 吊销后重发
 ```
 
@@ -43,7 +43,7 @@ WORLDVIEW_API_KEY='wm_...' npm run mcp
 | 名称 | scopes | 给谁 |
 | --- | --- | --- |
 | viewer | read | 只看 |
-| editor | read, write | 人网页校正、写作 Agent |
+| editor | read, write, delete | 人网页校正、MCP 增删改查 |
 | admin | read, write, delete, admin | 回滚和发钥匙 |
 
 无钥匙或钥匙无效：`401 UNAUTHORIZED`。钥匙有效但权限不够：`403 FORBIDDEN`。回滚在服务层再查一次 admin，不靠路由漏放。

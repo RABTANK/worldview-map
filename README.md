@@ -20,7 +20,7 @@ npm start
 - OpenAPI：http://127.0.0.1:3780/docs
 - 健康检查：http://127.0.0.1:3780/health
 
-第一次 `npm run seed` 会在终端打印三把 API Key。**明文只出现这一次**，数据库里只有 SHA-256 哈希。把 `editor` 那一行贴进网页的「API Key」才能保存校正；`admin` 才能回滚。
+第一次 `npm run seed` 会在终端打印三把 API Key。**明文只出现这一次**，数据库里只有 SHA-256 哈希。`editor` 可以查、增、改、删（网页校正和 MCP 都用它）；`admin` 才能回滚和签发钥匙。
 
 开发时热更新：
 
