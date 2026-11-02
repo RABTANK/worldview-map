@@ -41,7 +41,8 @@ export function fitCamera(bounds: Bounds, width: number, height: number, padding
 /** 列主序 3x3，供 WebGL mat3 使用。 */
 export function worldToClipMatrix(camera: Camera, width: number, height: number): Float32Array {
   const sx = (2 * camera.zoom) / width;
-  const sy = (2 * camera.zoom) / height;
+  // WebGL clip-space y points up; world and screen-space y point down.
+  const sy = (-2 * camera.zoom) / height;
   const tx = -camera.x * sx;
   const ty = -camera.y * sy;
   return new Float32Array([

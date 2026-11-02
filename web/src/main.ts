@@ -60,6 +60,7 @@ let selection: Selection = null;
 let hovered: Selection = null;
 let selectedVertex: { regionId: string; index: number } | null = null;
 let formDirty = false;
+let geometrySaving = false;
 let drag: Drag | null = null;
 let preview: { kind: 'place'; id: string; x: number; y: number } | { kind: 'region'; id: string; geometry: Polygon } | null = null;
 let gridVisible = true;
@@ -143,6 +144,14 @@ function zoomBy(factor: number): void {
   draw();
 }
 
+function gridStepForZoom(zoom: number): number {
+  const targetWorldSpacing = 80 / Math.max(zoom, 0.02);
+  const magnitude = 10 ** Math.floor(Math.log10(targetWorldSpacing));
+  const normalized = targetWorldSpacing / magnitude;
+  const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return factor * magnitude;
+}
+
 function draw(): void {
   if (!renderer || !view) return;
   const { width, height } = viewSize();
@@ -189,7 +198,7 @@ function draw(): void {
   const maxX = Math.max(corners[0].x, corners[1].x);
   const minY = Math.min(corners[0].y, corners[1].y);
   const maxY = Math.max(corners[0].y, corners[1].y);
-  grid = gridVisible ? { minX, minY, maxX, maxY, step: floor ? 1 : 100 } : null;
+  grid = gridVisible ? { minX, minY, maxX, maxY, step: floor ? 1 : gridStepForZoom(camera.zoom) } : null;
   renderer.draw({ camera, width, height, polygons, routes, places, tiles, grid });
   drawLabels(width, height);
 }
@@ -667,6 +676,11 @@ function nearestEdgePoint(region: Region, clientX: number, clientY: number): { i
 }
 
 async function saveGeometry(regionId: string, geometry: Polygon, successMessage: string): Promise<void> {
+  if (geometrySaving) {
+    setStatus('区域轮廓正在保存，请稍后再编辑', true);
+    return;
+  }
+  geometrySaving = true;
   try {
     await api.patchRegion(regionId, { geometry });
     preview = null;
@@ -677,10 +691,13 @@ async function saveGeometry(regionId: string, geometry: Polygon, successMessage:
     preview = null;
     setStatus(error instanceof Error ? error.message : '区域多边形保存失败', true);
     draw();
+  } finally {
+    geometrySaving = false;
   }
 }
 
 function insertVertex(region: Region, edgeIndex: number, point: Point): void {
+  if (geometrySaving) return;
   const points = [...childGeometry(region).points];
   points.splice(edgeIndex, 0, point);
   selectedVertex = { regionId: region.id, index: edgeIndex };
@@ -690,7 +707,7 @@ function insertVertex(region: Region, edgeIndex: number, point: Point): void {
 function deleteSelectedVertex(): void {
   const currentSelection = selection;
   const vertex = selectedVertex;
-  if (!canWrite() || currentSelection?.type !== 'region' || vertex?.regionId !== currentSelection.id) return;
+  if (geometrySaving || !canWrite() || currentSelection?.type !== 'region' || vertex?.regionId !== currentSelection.id) return;
   const region = view?.children.find((item) => item.id === currentSelection.id);
   if (!region) return;
   const points = childGeometry(region).points;
@@ -721,6 +738,8 @@ glCanvas.addEventListener('pointerdown', (event) => {
     drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false, selectOnClick: false };
     return;
   }
+  if (geometrySaving) return;
+  if (event.button !== 0) return;
   const selectedRegionId = selection?.type === 'region' ? selection.id : null;
   if (canWrite() && selectedRegionId && !event.shiftKey && (hit === null || (hit.type === 'region' && hit.id === selectedRegionId))) {
     const region = view.children.find((item) => item.id === selectedRegionId);
@@ -784,7 +803,7 @@ glCanvas.addEventListener('pointermove', (event) => {
   }
   const dx = worldPoint.x - currentDrag.start.x;
   const dy = worldPoint.y - currentDrag.start.y;
-  if (Math.hypot(dx, dy) > 2) currentDrag.moved = true;
+  if (Math.hypot(dx, dy) * camera.zoom > 2) currentDrag.moved = true;
   if (currentDrag.kind === 'place') preview = { kind: 'place', id: currentDrag.id, x: currentDrag.originX + dx, y: currentDrag.originY + dy };
   if (currentDrag.kind === 'region') preview = { kind: 'region', id: currentDrag.id, geometry: translatePolygon(currentDrag.origin, dx, dy) };
   if (currentDrag.kind === 'vertex') {
@@ -800,6 +819,7 @@ glCanvas.addEventListener('pointerup', async (event) => {
   drag = null;
   if (!finished) return;
   if (!finished.moved) {
+    preview = null;
     if (finished.kind === 'pan' && !finished.selectOnClick) return;
     const hit = finished.kind === 'vertex' ? { type: 'region' as const, id: finished.id } : pick(eventPoint(event));
     if (!sameSelection(selection, hit)) selectedVertex = null;
@@ -809,18 +829,18 @@ glCanvas.addEventListener('pointerup', async (event) => {
     draw();
     return;
   }
+  if (finished.kind === 'region' && preview?.kind === 'region') {
+    await saveGeometry(finished.id, preview.geometry, '区域多边形已平移并保存');
+    return;
+  }
+  if (finished.kind === 'vertex' && preview?.kind === 'region') {
+    await saveGeometry(finished.id, preview.geometry, '区域顶点已保存');
+    return;
+  }
   try {
     if (finished.kind === 'place' && preview?.kind === 'place') {
       await api.patchPlace(finished.id, { x: preview.x, y: preview.y });
       setStatus('地点坐标已保存');
-    }
-    if (finished.kind === 'region' && preview?.kind === 'region') {
-      await api.patchRegion(finished.id, { geometry: preview.geometry });
-      setStatus('区域多边形已平移并保存');
-    }
-    if (finished.kind === 'vertex' && preview?.kind === 'region') {
-      await api.patchRegion(finished.id, { geometry: preview.geometry });
-      setStatus('区域顶点已保存');
     }
     preview = null;
     formDirty = false;
