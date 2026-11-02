@@ -15,11 +15,13 @@ import {
   createKeySchema,
   createPlaceSchema,
   createRegionSchema,
+  createRouteSchema,
   floorBodySchema,
   parseBody,
   patchFloorSchema,
   patchPlaceSchema,
   patchRegionSchema,
+  patchRouteSchema,
   rollbackSchema,
   setTilesSchema,
   snapshotSchema,
@@ -233,6 +235,29 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.delete('/api/places/:id', async (request) => {
     const query = request.query as { confirm?: string };
     world.deletePlace((request.params as { id: string }).id, queryFlag(query.confirm), request.actor);
+    return { ok: true };
+  });
+
+  app.get('/api/routes', async (request) => {
+    const query = request.query as { regionId?: string; q?: string };
+    return { routes: world.listRoutes({ regionId: query.regionId, q: query.q }) };
+  });
+
+  app.post('/api/routes', async (request, reply) => {
+    const body = parseBody(createRouteSchema, request.body);
+    return reply.status(201).send(world.createRoute(body, request.actor));
+  });
+
+  app.get('/api/routes/:id', async (request) => world.getRoute((request.params as { id: string }).id));
+
+  app.patch('/api/routes/:id', async (request) => {
+    const body = parseBody(patchRouteSchema, request.body);
+    return world.updateRoute((request.params as { id: string }).id, body, request.actor);
+  });
+
+  app.delete('/api/routes/:id', async (request) => {
+    const query = request.query as { confirm?: string };
+    world.deleteRoute((request.params as { id: string }).id, queryFlag(query.confirm), request.actor);
     return { ok: true };
   });
 

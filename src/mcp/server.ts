@@ -18,6 +18,11 @@ export const MCP_TOOL_NAMES = [
   'map_upsert_location',
   'map_update_location',
   'map_delete_location',
+  'map_list_routes',
+  'map_get_route',
+  'map_create_route',
+  'map_update_route',
+  'map_delete_route',
   'map_get_context',
   'map_search',
   'map_list_floors',
@@ -33,6 +38,11 @@ export const MCP_TOOL_NAMES = [
 const polygonSchema = z.object({
   type: z.literal('Polygon'),
   points: z.array(z.object({ x: z.number(), y: z.number() })).min(3).max(64),
+});
+
+const lineStringSchema = z.object({
+  type: z.literal('LineString'),
+  points: z.array(z.object({ x: z.number(), y: z.number() })).min(2).max(256),
 });
 
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
@@ -268,11 +278,88 @@ export function createMcpServer(runtime: Runtime, getActor: () => Actor, limiter
   );
 
   server.registerTool(
+    'map_list_routes',
+    {
+      title: '列出道路',
+      description: '列出道路，可按所属区域和名称/类型过滤。路线几何使用所在区域的局部平面坐标。需要 read。',
+      inputSchema: { regionId: z.string().optional(), q: z.string().optional() },
+      annotations: { readOnlyHint: true },
+    },
+    wrap('read', (_actor, args) => ({ routes: world.listRoutes(args as never) })),
+  );
+
+  server.registerTool(
+    'map_get_route',
+    {
+      title: '读取道路',
+      description: '按 id 读取道路。需要 read。',
+      inputSchema: { id: z.string() },
+      annotations: { readOnlyHint: true },
+    },
+    wrap('read', (_actor, args) => world.getRoute(String(args.id))),
+  );
+
+  server.registerTool(
+    'map_create_route',
+    {
+      title: '创建道路',
+      description: '创建当前区域坐标系下的道路折线。kind 为 road、trail、sea 或 custom；width 使用局部坐标单位；style 可选为十六进制线色覆盖。需要 write。',
+      inputSchema: {
+        id: z.string().optional(),
+        regionId: z.string(),
+        name: z.string(),
+        kind: z.enum(['road', 'trail', 'sea', 'custom']).optional(),
+        geometry: lineStringSchema,
+        width: z.number().nullable().optional().describe('1–64 局部坐标单位'),
+        style: z.string().nullable().optional().describe('可选 #RGB 或 #RRGGBB 线色覆盖'),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    wrap('write', (actor, args) => world.createRoute(args as never, actor)),
+  );
+
+  server.registerTool(
+    'map_update_route',
+    {
+      title: '更新道路',
+      description: '按 id 局部更新道路名称、类型、所属区域、折线或样式。null 可清除 width/style 覆盖。需要 write。',
+      inputSchema: {
+        id: z.string(),
+        regionId: z.string().optional(),
+        name: z.string().optional(),
+        kind: z.enum(['road', 'trail', 'sea', 'custom']).optional(),
+        geometry: lineStringSchema.optional(),
+        width: z.number().nullable().optional(),
+        style: z.string().nullable().optional(),
+      },
+      annotations: { readOnlyHint: false, idempotentHint: true },
+    },
+    wrap('write', (actor, args) => {
+      const { id, ...patch } = args;
+      return world.updateRoute(String(id), patch as never, actor);
+    }),
+  );
+
+  server.registerTool(
+    'map_delete_route',
+    {
+      title: '删除道路',
+      description: '危险操作。confirm 必须为 true 才会删除。删除所属区域时，道路随区域级联清理。需要 delete。',
+      inputSchema: { id: z.string(), confirm: z.boolean() },
+      annotations: { destructiveHint: true, readOnlyHint: false },
+    },
+    wrap('delete', (actor, args) => {
+      world.deleteRoute(String(args.id), Boolean(args.confirm), actor);
+      return { ok: true };
+    }),
+  );
+
+  server.registerTool(
     'map_get_context',
     {
       title: '下钻上下文',
       description:
-        '返回当前区域、面包屑、直接子级、地点，以及建筑的室内楼层摘要。summary 字段给续写用。regionId 省略表示世界根。需要 read。',
+        '返回当前区域、面包屑、直接子级、地点、道路，以及建筑的室内楼层摘要。summary 字段给续写用。regionId 省略表示世界根。需要 read。',
       inputSchema: {
         regionId: z.string().nullable().optional(),
         floorId: z.string().nullable().optional(),

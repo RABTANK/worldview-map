@@ -3,7 +3,7 @@ import { fitCamera, screenToWorld, worldToScreen, type Camera } from '../../src/
 import { distance, pointInPolygon, polygonBounds, translatePolygon, vertexAverage, type Point, type Polygon } from '../../src/shared/geom.js';
 import { LEVEL_LABEL } from '../../src/shared/levels.js';
 import { TILE_COLORS, TILE_LABEL, TILE_TYPES, type TileType } from '../../src/shared/tiles.js';
-import type { MapView, Place, Region, Scope } from '../../src/shared/types.js';
+import type { MapView, Place, Region, RouteKind, Scope } from '../../src/shared/types.js';
 import { Api, ApiError } from './api.js';
 import { MapGl } from './gl.js';
 
@@ -14,9 +14,17 @@ type Selection =
   | null;
 
 type Drag =
-  | { kind: 'pan'; x: number; y: number; moved: boolean }
+  | { kind: 'pan'; x: number; y: number; moved: boolean; selectOnClick: boolean }
   | { kind: 'place'; id: string; originX: number; originY: number; start: Point; moved: boolean }
-  | { kind: 'region'; id: string; origin: Polygon; start: Point; moved: boolean };
+  | { kind: 'region'; id: string; origin: Polygon; start: Point; moved: boolean }
+  | { kind: 'vertex'; id: string; index: number; origin: Polygon; start: Point; moved: boolean };
+
+const ROUTE_STYLE: Record<RouteKind, { color: string; width: number }> = {
+  road: { color: '#e1b766', width: 8 },
+  trail: { color: '#c18d57', width: 5 },
+  sea: { color: '#76bdd0', width: 10 },
+  custom: { color: '#d88b78', width: 6 },
+};
 
 const KEY_STORAGE = 'worldview-map-api-key';
 
@@ -49,9 +57,14 @@ let floorId: string | null = null;
 let view: MapView | null = null;
 let camera: Camera = { x: 500, y: 500, zoom: 0.6 };
 let selection: Selection = null;
+let hovered: Selection = null;
+let selectedVertex: { regionId: string; index: number } | null = null;
 let formDirty = false;
+let geometrySaving = false;
 let drag: Drag | null = null;
 let preview: { kind: 'place'; id: string; x: number; y: number } | { kind: 'region'; id: string; geometry: Polygon } | null = null;
+let gridVisible = true;
+let spacePanning = false;
 let scopes: Scope[] = [];
 
 function canWrite(): boolean {
@@ -109,6 +122,7 @@ function fit(): void {
   const points: Point[] = [];
   for (const child of view.children) points.push(...childGeometry(child).points);
   for (const place of view.places) points.push(placePoint(place));
+  for (const route of view.routes) points.push(...route.geometry.points);
   if (!points.length) {
     camera = { x: 500, y: 500, zoom: Math.min(width, height) / 1200 };
   } else {
@@ -117,24 +131,55 @@ function fit(): void {
   draw();
 }
 
+function zoomBy(factor: number): void {
+  const { width, height } = viewSize();
+  if (width < 2 || height < 2) return;
+  const sx = width / 2;
+  const sy = height / 2;
+  const before = screenToWorld(camera, width, height, sx, sy);
+  camera.zoom = Math.min(400, Math.max(0.02, camera.zoom * factor));
+  const after = screenToWorld(camera, width, height, sx, sy);
+  camera.x += before.x - after.x;
+  camera.y += before.y - after.y;
+  draw();
+}
+
+function gridStepForZoom(zoom: number): number {
+  const targetWorldSpacing = 80 / Math.max(zoom, 0.02);
+  const magnitude = 10 ** Math.floor(Math.log10(targetWorldSpacing));
+  const normalized = targetWorldSpacing / magnitude;
+  const factor = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  return factor * magnitude;
+}
+
 function draw(): void {
   if (!renderer || !view) return;
   const { width, height } = viewSize();
   if (width < 2 || height < 2) return;
   const selectedRegion = selection?.type === 'region' ? selection.id : null;
   const selectedPlace = selection?.type === 'place' ? selection.id : null;
+  const hoveredRegion = hovered?.type === 'region' ? hovered.id : null;
+  const hoveredPlace = hovered?.type === 'place' ? hovered.id : null;
   const polygons = indoor()
     ? []
     : view.children.map((child) => ({
         points: childGeometry(child).points,
         fill: child.fill,
-        stroke: child.id === selectedRegion ? '#f2d48a' : child.stroke,
+        stroke: child.id === selectedRegion ? '#f2d48a' : child.id === hoveredRegion ? '#a9d8c6' : child.stroke,
+        strokeWidth: child.id === selectedRegion ? 4 : child.id === hoveredRegion ? 3 : 1.75,
+      }));
+  const routes = indoor()
+    ? []
+    : view.routes.map((route) => ({
+        points: route.geometry.points,
+        color: route.style ?? ROUTE_STYLE[route.kind].color,
+        width: route.width ?? ROUTE_STYLE[route.kind].width,
       }));
   const places = indoor()
     ? []
     : view.places.map((place) => ({
         ...placePoint(place),
-        fill: place.id === selectedPlace ? '#f2d48a' : '#f4ecdf',
+        fill: place.id === selectedPlace ? '#f2d48a' : place.id === hoveredPlace ? '#a9d8c6' : '#f4ecdf',
       }));
   const floor = indoor() ? view.indoor?.activeFloor : null;
   const tiles =
@@ -153,8 +198,8 @@ function draw(): void {
   const maxX = Math.max(corners[0].x, corners[1].x);
   const minY = Math.min(corners[0].y, corners[1].y);
   const maxY = Math.max(corners[0].y, corners[1].y);
-  grid = { minX, minY, maxX, maxY, step: floor ? 1 : 100 };
-  renderer.draw({ camera, width, height, polygons, places, tiles, grid });
+  grid = gridVisible ? { minX, minY, maxX, maxY, step: floor ? 1 : gridStepForZoom(camera.zoom) } : null;
+  renderer.draw({ camera, width, height, polygons, routes, places, tiles, grid });
   drawLabels(width, height);
 }
 
@@ -167,21 +212,77 @@ function drawLabels(width: number, height: number): void {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = '#f6efe2';
-  ctx.font = '14px Palatino, "Songti SC", serif';
+  ctx.strokeStyle = 'rgba(16, 14, 12, 0.9)';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 3;
+  const occupied: { left: number; right: number; top: number; bottom: number }[] = [];
+  const placeLabel = (text: string, x: number, y: number, font: string): boolean => {
+    ctx.font = font;
+    const textWidth = ctx.measureText(text).width;
+    const box = { left: x - textWidth / 2 - 4, right: x + textWidth / 2 + 4, top: y - 9, bottom: y + 9 };
+    if (box.left < 4 || box.right > width - 4 || box.top < 4 || box.bottom > height - 4) return false;
+    if (occupied.some((other) => box.left < other.right + 3 && box.right + 3 > other.left && box.top < other.bottom + 2 && box.bottom + 2 > other.top)) return false;
+    ctx.strokeText(text, x, y);
+    ctx.fillText(text, x, y);
+    occupied.push(box);
+    return true;
+  };
   if (!indoor()) {
-    for (const child of view.children) {
+    const selectedRegion = selection?.type === 'region' ? selection.id : null;
+    const hoveredRegion = hovered?.type === 'region' ? hovered.id : null;
+    const showAllLabels = camera.zoom >= 0.12;
+    const regions = [...view.children].sort((a, b) => {
+      const aPriority = a.id === selectedRegion ? 2 : a.id === hoveredRegion ? 1 : 0;
+      const bPriority = b.id === selectedRegion ? 2 : b.id === hoveredRegion ? 1 : 0;
+      return bPriority - aPriority;
+    });
+    for (const child of regions) {
+      if (!showAllLabels && child.id !== selectedRegion && child.id !== hoveredRegion) continue;
       const center = vertexAverage(childGeometry(child).points);
       const screen = worldToScreen(camera, width, height, center.x, center.y);
-      ctx.fillText(child.name, screen.x, screen.y);
+      const selected = child.id === selectedRegion || child.id === hoveredRegion;
+      const font = selected ? 'bold 15px Palatino, "Songti SC", serif' : '14px Palatino, "Songti SC", serif';
+      for (const offset of [0, -18, 18, -34, 34]) {
+        if (placeLabel(child.name, screen.x, screen.y + offset, font)) break;
+      }
     }
-    ctx.font = '12px Palatino, "Songti SC", serif';
-    for (const place of view.places) {
+    const selectedPlace = selection?.type === 'place' ? selection.id : null;
+    const hoveredPlace = hovered?.type === 'place' ? hovered.id : null;
+    const places = [...view.places].sort((a, b) => {
+      const aPriority = a.id === selectedPlace ? 2 : a.id === hoveredPlace ? 1 : 0;
+      const bPriority = b.id === selectedPlace ? 2 : b.id === hoveredPlace ? 1 : 0;
+      return bPriority - aPriority;
+    });
+    for (const place of places) {
+      if (camera.zoom < 0.18 && place.id !== selectedPlace && place.id !== hoveredPlace) continue;
       const point = placePoint(place);
       const screen = worldToScreen(camera, width, height, point.x, point.y);
-      ctx.fillText(place.name, screen.x, screen.y + 16);
+      const selected = place.id === selectedPlace || place.id === hoveredPlace;
+      const font = selected ? 'bold 13px Palatino, "Songti SC", serif' : '12px Palatino, "Songti SC", serif';
+      for (const [dx, dy] of [[0, 16], [0, -16], [20, 0], [-20, 0]] as const) {
+        if (placeLabel(place.name, screen.x + dx, screen.y + dy, font)) break;
+      }
     }
   } else if (!view.indoor?.activeFloor) {
     ctx.fillText('这栋建筑还没有室内楼层', width / 2, height / 2);
+  }
+
+  const selectedRegionId = selection?.type === 'region' ? selection.id : null;
+  if (canWrite() && selectedRegionId) {
+    const region = view.children.find((item) => item.id === selectedRegionId);
+    if (region) {
+      for (let index = 0; index < childGeometry(region).points.length; index += 1) {
+        const point = childGeometry(region).points[index];
+        const screen = worldToScreen(camera, width, height, point.x, point.y);
+        ctx.beginPath();
+        ctx.arc(screen.x, screen.y, selectedVertex?.regionId === region.id && selectedVertex.index === index ? 7 : 5, 0, Math.PI * 2);
+        ctx.fillStyle = selectedVertex?.regionId === region.id && selectedVertex.index === index ? '#f2d48a' : '#211b16';
+        ctx.fill();
+        ctx.strokeStyle = '#f2d48a';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+    }
   }
 }
 
@@ -299,9 +400,9 @@ function renderChrome(): void {
   const floor = view?.indoor?.activeFloor;
   hint.textContent = indoor()
     ? floor
-      ? '室内平面：点击格子可选中。有 write 权限时，用下方色块立即改 tile。滚轮缩放，拖动空白平移。'
-      : '进入建筑后这里是室内平面。返回上级可回到建筑所在的建筑群。'
-    : '拖动空白平移，滚轮缩放，双击区域下钻。拖动地点可校正坐标；按住 Shift 拖动区域可平移多边形。只渲染当前层的直接子级。';
+      ? '滚轮或 +/− 缩放 · 空白拖动或 Space+拖动平移 · 点击格子选中，有 write 权限时用色块修改。'
+      : '进入建筑后显示室内平面 · 滚轮或 +/− 缩放 · 空白拖动或 Space+拖动平移。'
+    : `滚轮或 +/− 缩放 · 空白拖动或 Space+拖动平移 · 双击区域下钻${canWrite() ? ' · 点选区域后拖顶点、点边插点，选中顶点后 Delete 删除 · Shift+拖动平移区域' : ''}。`;
 }
 
 function note(text: string): HTMLParagraphElement {
@@ -531,50 +632,185 @@ function eventPoint(event: { clientX: number; clientY: number }): Point {
   return screenToWorld(camera, width, height, event.clientX - rect.left, event.clientY - rect.top);
 }
 
+function nearestVertexIndex(region: Region, clientX: number, clientY: number): number | null {
+  const rect = glCanvas.getBoundingClientRect();
+  const { width, height } = viewSize();
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  let nearestIndex: number | null = null;
+  let nearestDistance = Infinity;
+  for (let index = 0; index < childGeometry(region).points.length; index += 1) {
+    const point = childGeometry(region).points[index];
+    const screen = worldToScreen(camera, width, height, point.x, point.y);
+    const distance = Math.hypot(screen.x - x, screen.y - y);
+    if (distance <= 10 && distance < nearestDistance) {
+      nearestIndex = index;
+      nearestDistance = distance;
+    }
+  }
+  return nearestIndex;
+}
+
+function nearestEdgePoint(region: Region, clientX: number, clientY: number): { index: number; point: Point } | null {
+  const rect = glCanvas.getBoundingClientRect();
+  const { width, height } = viewSize();
+  const points = childGeometry(region).points;
+  const target = { x: clientX - rect.left, y: clientY - rect.top };
+  let nearest: { index: number; distance: number; point: Point } | null = null;
+  for (let index = 0; index < points.length; index += 1) {
+    const a = points[index];
+    const b = points[(index + 1) % points.length];
+    const aScreen = worldToScreen(camera, width, height, a.x, a.y);
+    const bScreen = worldToScreen(camera, width, height, b.x, b.y);
+    const dx = bScreen.x - aScreen.x;
+    const dy = bScreen.y - aScreen.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((target.x - aScreen.x) * dx + (target.y - aScreen.y) * dy) / lengthSquared));
+    const screenPoint = { x: aScreen.x + t * dx, y: aScreen.y + t * dy };
+    const distance = Math.hypot(screenPoint.x - target.x, screenPoint.y - target.y);
+    if (distance <= 9 && (!nearest || distance < nearest.distance)) {
+      nearest = { index, distance, point: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t } };
+    }
+  }
+  return nearest ? { index: nearest.index + 1, point: nearest.point } : null;
+}
+
+async function saveGeometry(regionId: string, geometry: Polygon, successMessage: string): Promise<void> {
+  if (geometrySaving) {
+    setStatus('区域轮廓正在保存，请稍后再编辑', true);
+    return;
+  }
+  geometrySaving = true;
+  try {
+    await api.patchRegion(regionId, { geometry });
+    preview = null;
+    formDirty = false;
+    await reload(false);
+    setStatus(successMessage);
+  } catch (error) {
+    preview = null;
+    setStatus(error instanceof Error ? error.message : '区域多边形保存失败', true);
+    draw();
+  } finally {
+    geometrySaving = false;
+  }
+}
+
+function insertVertex(region: Region, edgeIndex: number, point: Point): void {
+  if (geometrySaving) return;
+  const points = [...childGeometry(region).points];
+  points.splice(edgeIndex, 0, point);
+  selectedVertex = { regionId: region.id, index: edgeIndex };
+  void saveGeometry(region.id, { type: 'Polygon', points }, '已插入并保存顶点');
+}
+
+function deleteSelectedVertex(): void {
+  const currentSelection = selection;
+  const vertex = selectedVertex;
+  if (geometrySaving || !canWrite() || currentSelection?.type !== 'region' || vertex?.regionId !== currentSelection.id) return;
+  const region = view?.children.find((item) => item.id === currentSelection.id);
+  if (!region) return;
+  const points = childGeometry(region).points;
+  if (points.length <= 3) {
+    setStatus('区域至少需要保留 3 个顶点', true);
+    return;
+  }
+  const next = points.filter((_point, index) => index !== vertex.index);
+  selectedVertex = null;
+  void saveGeometry(region.id, { type: 'Polygon', points: next }, '已删除并保存顶点');
+}
+
+function sameSelection(a: Selection, b: Selection): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.type !== b.type) return false;
+  if (a.type === 'tile' && b.type === 'tile') return a.x === b.x && a.y === b.y;
+  return 'id' in a && 'id' in b && a.id === b.id;
+}
+
 glCanvas.addEventListener('pointerdown', (event) => {
   if (!view) return;
+  glCanvas.focus({ preventScroll: true });
   glCanvas.setPointerCapture(event.pointerId);
   const worldPoint = eventPoint(event);
   const hit = pick(worldPoint);
-  if (event.button === 1 || event.altKey) {
-    drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false };
+  if (event.button === 1 || event.altKey || spacePanning) {
+    event.preventDefault();
+    drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false, selectOnClick: false };
     return;
+  }
+  if (geometrySaving) return;
+  if (event.button !== 0) return;
+  const selectedRegionId = selection?.type === 'region' ? selection.id : null;
+  if (canWrite() && selectedRegionId && !event.shiftKey && (hit === null || (hit.type === 'region' && hit.id === selectedRegionId))) {
+    const region = view.children.find((item) => item.id === selectedRegionId);
+    if (region) {
+      const vertexIndex = nearestVertexIndex(region, event.clientX, event.clientY);
+      if (vertexIndex !== null) {
+        selectedVertex = { regionId: region.id, index: vertexIndex };
+        drag = { kind: 'vertex', id: region.id, index: vertexIndex, origin: childGeometry(region), start: worldPoint, moved: false };
+        draw();
+        return;
+      }
+      const edge = nearestEdgePoint(region, event.clientX, event.clientY);
+      if (edge) {
+        insertVertex(region, edge.index, edge.point);
+        draw();
+        return;
+      }
+    }
   }
   if (canWrite() && hit?.type === 'place' && !event.shiftKey) {
     const place = view.places.find((item) => item.id === hit.id)!;
     drag = { kind: 'place', id: hit.id, originX: place.x, originY: place.y, start: worldPoint, moved: false };
     selection = hit;
+    selectedVertex = null;
     return;
   }
   if (canWrite() && event.shiftKey && hit?.type === 'region') {
     const region = view.children.find((item) => item.id === hit.id)!;
     drag = { kind: 'region', id: hit.id, origin: region.geometry, start: worldPoint, moved: false };
     selection = hit;
+    selectedVertex = null;
     return;
   }
-  drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false };
+  drag = { kind: 'pan', x: event.clientX, y: event.clientY, moved: false, selectOnClick: true };
+  if (hit && !sameSelection(selection, hit)) selectedVertex = null;
   if (hit) selection = hit;
 });
 
 glCanvas.addEventListener('pointermove', (event) => {
-  if (!drag) return;
+  if (!drag) {
+    const hit = view ? pick(eventPoint(event)) : null;
+    if (!sameSelection(hit, hovered)) {
+      hovered = hit;
+      draw();
+    }
+    glCanvas.style.cursor = spacePanning ? 'grab' : hit ? 'pointer' : 'grab';
+    return;
+  }
+  const currentDrag = drag;
   const worldPoint = eventPoint(event);
-  if (drag.kind === 'pan') {
-    const dx = event.clientX - drag.x;
-    const dy = event.clientY - drag.y;
-    if (Math.hypot(dx, dy) > 3) drag.moved = true;
+  if (currentDrag.kind === 'pan') {
+    const dx = event.clientX - currentDrag.x;
+    const dy = event.clientY - currentDrag.y;
+    if (Math.hypot(dx, dy) > 3) currentDrag.moved = true;
     camera.x -= dx / camera.zoom;
     camera.y -= dy / camera.zoom;
-    drag.x = event.clientX;
-    drag.y = event.clientY;
+    currentDrag.x = event.clientX;
+    currentDrag.y = event.clientY;
     draw();
     return;
   }
-  const dx = worldPoint.x - drag.start.x;
-  const dy = worldPoint.y - drag.start.y;
-  if (Math.hypot(dx, dy) > 2) drag.moved = true;
-  if (drag.kind === 'place') preview = { kind: 'place', id: drag.id, x: drag.originX + dx, y: drag.originY + dy };
-  if (drag.kind === 'region') preview = { kind: 'region', id: drag.id, geometry: translatePolygon(drag.origin, dx, dy) };
+  const dx = worldPoint.x - currentDrag.start.x;
+  const dy = worldPoint.y - currentDrag.start.y;
+  if (Math.hypot(dx, dy) * camera.zoom > 2) currentDrag.moved = true;
+  if (currentDrag.kind === 'place') preview = { kind: 'place', id: currentDrag.id, x: currentDrag.originX + dx, y: currentDrag.originY + dy };
+  if (currentDrag.kind === 'region') preview = { kind: 'region', id: currentDrag.id, geometry: translatePolygon(currentDrag.origin, dx, dy) };
+  if (currentDrag.kind === 'vertex') {
+    const points = currentDrag.origin.points.map((point, index) => index === currentDrag.index ? worldPoint : point);
+    preview = { kind: 'region', id: currentDrag.id, geometry: { type: 'Polygon', points } };
+    selectedVertex = { regionId: currentDrag.id, index: currentDrag.index };
+  }
   draw();
 });
 
@@ -583,21 +819,28 @@ glCanvas.addEventListener('pointerup', async (event) => {
   drag = null;
   if (!finished) return;
   if (!finished.moved) {
-    const hit = pick(eventPoint(event));
+    preview = null;
+    if (finished.kind === 'pan' && !finished.selectOnClick) return;
+    const hit = finished.kind === 'vertex' ? { type: 'region' as const, id: finished.id } : pick(eventPoint(event));
+    if (!sameSelection(selection, hit)) selectedVertex = null;
     selection = hit;
     formDirty = false;
     renderChrome();
     draw();
     return;
   }
+  if (finished.kind === 'region' && preview?.kind === 'region') {
+    await saveGeometry(finished.id, preview.geometry, '区域多边形已平移并保存');
+    return;
+  }
+  if (finished.kind === 'vertex' && preview?.kind === 'region') {
+    await saveGeometry(finished.id, preview.geometry, '区域顶点已保存');
+    return;
+  }
   try {
     if (finished.kind === 'place' && preview?.kind === 'place') {
       await api.patchPlace(finished.id, { x: preview.x, y: preview.y });
       setStatus('地点坐标已保存');
-    }
-    if (finished.kind === 'region' && preview?.kind === 'region') {
-      await api.patchRegion(finished.id, { geometry: preview.geometry });
-      setStatus('区域多边形已平移并保存');
     }
     preview = null;
     formDirty = false;
@@ -607,6 +850,12 @@ glCanvas.addEventListener('pointerup', async (event) => {
     setStatus(error instanceof Error ? error.message : '拖动保存失败', true);
     draw();
   }
+});
+
+glCanvas.addEventListener('pointercancel', () => {
+  drag = null;
+  preview = null;
+  draw();
 });
 
 glCanvas.addEventListener('dblclick', (event) => {
@@ -632,6 +881,45 @@ glCanvas.addEventListener(
   },
   { passive: false },
 );
+
+document.querySelector('#zoom-in')!.addEventListener('click', () => zoomBy(1.2));
+document.querySelector('#zoom-out')!.addEventListener('click', () => zoomBy(1 / 1.2));
+document.querySelector('#grid-toggle')!.addEventListener('click', (event) => {
+  gridVisible = !gridVisible;
+  (event.currentTarget as HTMLButtonElement).textContent = gridVisible ? '隐藏网格' : '显示网格';
+  draw();
+});
+
+window.addEventListener('keydown', (event) => {
+  const target = event.target;
+  const interactive = target instanceof HTMLElement && Boolean(target.closest('button,a,input,textarea,select,[contenteditable="true"]'));
+  if (interactive) return;
+  if (event.code === 'Space') {
+    event.preventDefault();
+    spacePanning = true;
+    glCanvas.style.cursor = 'grab';
+  } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (selectedVertex) {
+      event.preventDefault();
+      deleteSelectedVertex();
+    }
+  } else if (event.key === '+' || event.key === '=') {
+    event.preventDefault();
+    zoomBy(1.2);
+  } else if (event.key === '-') {
+    event.preventDefault();
+    zoomBy(1 / 1.2);
+  }
+});
+window.addEventListener('keyup', (event) => {
+  if (event.code === 'Space') {
+    spacePanning = false;
+    glCanvas.style.cursor = '';
+  }
+});
+window.addEventListener('blur', () => {
+  spacePanning = false;
+});
 
 document.querySelector('#fit')!.addEventListener('click', () => fit());
 document.querySelector('#up')!.addEventListener('click', () => {

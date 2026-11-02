@@ -1,4 +1,4 @@
-import type { Polygon } from './geom.js';
+import type { LineString, Polygon } from './geom.js';
 import type { RegionLevel } from './levels.js';
 import type { TileType } from './tiles.js';
 
@@ -29,6 +29,21 @@ export type Place = {
   kind: string;
   x: number;
   y: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export const ROUTE_KINDS = ['road', 'trail', 'sea', 'custom'] as const;
+export type RouteKind = (typeof ROUTE_KINDS)[number];
+
+export type Route = {
+  id: string;
+  regionId: string;
+  name: string;
+  kind: RouteKind;
+  geometry: LineString;
+  width: number | null;
+  style: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -65,6 +80,7 @@ export type MapView = {
   breadcrumb: Crumb[];
   children: Region[];
   places: Place[];
+  routes: Route[];
   indoor: IndoorView | null;
   summary: string;
 };

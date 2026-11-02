@@ -2,6 +2,7 @@ import type { Polygon } from './shared/geom.js';
 import type { RegionLevel } from './shared/levels.js';
 import type { TileType } from './shared/tiles.js';
 import type { Actor } from './shared/types.js';
+import type { RouteInput } from './domain/world.js';
 import { createRuntime } from './runtime.js';
 
 const actor: Actor = { keyId: null, name: 'seed', scopes: ['read', 'write', 'delete', 'admin'] };
@@ -59,13 +60,11 @@ const regions: {
     fill: '#1f6f78',
     sortOrder: 0,
     geometry: poly([
-      [70, 90],
-      [430, 60],
-      [540, 210],
-      [500, 560],
-      [280, 760],
-      [60, 620],
-      [40, 280],
+      [120, 110], [205, 95], [250, 55], [330, 75], [380, 45], [435, 85], [500, 70], [535, 128],
+      [590, 150], [575, 215], [620, 260], [590, 320], [610, 390], [565, 445], [580, 500], [530, 555],
+      [500, 620], [440, 640], [400, 700], [340, 680], [300, 730], [245, 690], [205, 715], [160, 670],
+      [110, 665], [90, 600], [55, 565], [80, 500], [50, 455], [72, 390], [40, 335], [85, 285],
+      [60, 225], [100, 190],
     ]),
   },
   {
@@ -78,12 +77,10 @@ const regions: {
     fill: '#2f6b45',
     sortOrder: 1,
     geometry: poly([
-      [620, 160],
-      [900, 120],
-      [980, 360],
-      [860, 690],
-      [640, 640],
-      [560, 380],
+      [650, 180], [710, 135], [765, 170], [805, 115], [860, 145], [900, 120], [940, 180], [920, 240],
+      [970, 300], [940, 360], [970, 420], [920, 465], [900, 530], [850, 560], [815, 640], [760, 675],
+      [720, 620], [665, 645], [625, 585], [600, 525], [570, 490], [590, 420], [555, 365], [585, 310],
+      [560, 250], [610, 225],
     ]),
   },
   {
@@ -96,11 +93,10 @@ const regions: {
     fill: '#3d5a80',
     sortOrder: 0,
     geometry: poly([
-      [80, 70],
-      [760, 50],
-      [820, 420],
-      [260, 640],
-      [60, 360],
+      [80, 70], [250, 50], [350, 65], [430, 30], [530, 60], [620, 55], [760, 50], [820, 125],
+      [790, 210], [830, 280], [805, 355], [820, 420], [770, 465], [710, 505], [650, 545], [580, 570],
+      [500, 620], [420, 640], [350, 610], [260, 635], [195, 600], [130, 570], [75, 520], [60, 445],
+      [35, 380], [60, 320], [40, 250], [75, 180],
     ]),
   },
   {
@@ -113,10 +109,9 @@ const regions: {
     fill: '#7a4e2d',
     sortOrder: 1,
     geometry: poly([
-      [140, 700],
-      [560, 660],
-      [620, 900],
-      [180, 940],
+      [140, 700], [220, 675], [285, 690], [340, 655], [400, 680], [470, 660], [560, 685], [590, 740],
+      [625, 790], [605, 845], [620, 900], [550, 930], [480, 915], [420, 950], [340, 925], [275, 945],
+      [210, 915], [180, 865], [135, 820], [160, 765],
     ]),
   },
   {
@@ -129,11 +124,10 @@ const regions: {
     fill: '#3f7f78',
     sortOrder: 0,
     geometry: poly([
-      [120, 120],
-      [780, 80],
-      [860, 520],
-      [200, 640],
-      [80, 340],
+      [120, 120], [220, 95], [300, 120], [365, 80], [455, 105], [530, 75], [620, 105], [700, 80],
+      [780, 105], [820, 160], [860, 220], [835, 285], [875, 350], [850, 420], [860, 520], [790, 555],
+      [720, 590], [640, 570], [560, 620], [470, 600], [390, 645], [310, 610], [240, 650], [200, 590],
+      [145, 535], [110, 465], [80, 390], [105, 320], [70, 255], [110, 195],
     ]),
   },
   {
@@ -390,6 +384,23 @@ const places = [
   { id: 'place_lighthouse_log', regionId: 'building_old_lighthouse', name: '灯塔日志', description: '放在门厅柜台后的值守记录。', tags: ['文书'], kind: 'item', x: 4, y: 5 },
 ];
 
+const seedRoutes: RouteInput[] = [
+  {
+    id: 'route_silverport_ash_trade',
+    regionId: 'continent_frostsong',
+    name: '银港—灰烬镇商路',
+    kind: 'road',
+    geometry: { type: 'LineString', points: [{ x: 470, y: 505 }, { x: 520, y: 560 }, { x: 505, y: 620 }, { x: 480, y: 690 }] },
+  },
+  {
+    id: 'route_lighthouse_salt_lane',
+    regionId: 'city_silverport',
+    name: '灯塔区盐路',
+    kind: 'trail',
+    geometry: { type: 'LineString', points: [{ x: 70, y: 350 }, { x: 160, y: 330 }, { x: 260, y: 370 }, { x: 380, y: 405 }, { x: 465, y: 450 }] },
+  },
+];
+
 const hall = parseGrid([
   '##############',
   '#............#',
@@ -424,6 +435,7 @@ function resetWorld(sqlite: { exec: (sql: string) => void }): void {
   sqlite.exec(`
     DELETE FROM indoor_tiles;
     DELETE FROM indoor_floors;
+    DELETE FROM routes;
     DELETE FROM places;
     DELETE FROM regions WHERE level = 'building';
     DELETE FROM regions WHERE level = 'building_group';
@@ -471,6 +483,7 @@ resetWorld(runtime.sqlite);
 
 for (const region of regions) runtime.world.createRegion(region, actor);
 for (const place of places) runtime.world.createPlace(place, actor);
+for (const route of seedRoutes) runtime.world.createRoute(route, actor);
 
 const ground = runtime.world.createFloor(
   { id: 'floor_lighthouse_0', regionId: 'building_old_lighthouse', floorIndex: 0, name: '门厅', width: hall.width, height: hall.height },
@@ -488,6 +501,6 @@ runtime.sqlite.close();
 ensureKeys(resetKeys);
 
 console.log('');
-console.log(`已写入种子世界「折光海纪」：${regions.length} 个区域，${places.length} 个地点，旧灯塔 2 层室内 tile。`);
+console.log(`已写入种子世界「折光海纪」：${regions.length} 个区域，${places.length} 个地点，${seedRoutes.length} 条道路，旧灯塔 2 层室内 tile。`);
 console.log(`快照 ${snapshot.id}  ${snapshot.label}`);
 console.log('层级示例：霜歌大陆 → 银港 → 灯塔区 → 潮声坊 → 旧灯塔（室内）。');

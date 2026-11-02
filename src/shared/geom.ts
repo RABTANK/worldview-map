@@ -5,6 +5,11 @@ export type Polygon = {
   points: Point[];
 };
 
+export type LineString = {
+  type: 'LineString';
+  points: Point[];
+};
+
 export function isFiniteCoord(value: number): boolean {
   return Number.isFinite(value) && value >= -100_000 && value <= 100_000;
 }
@@ -23,6 +28,22 @@ export function parsePolygon(input: unknown): Polygon | null {
     points.push({ x, y });
   }
   return { type: 'Polygon', points };
+}
+
+export function parseLineString(input: unknown): LineString | null {
+  if (!input || typeof input !== 'object') return null;
+  const record = input as { type?: unknown; points?: unknown };
+  if (record.type !== 'LineString' || !Array.isArray(record.points)) return null;
+  if (record.points.length < 2 || record.points.length > 256) return null;
+  const points: Point[] = [];
+  for (const point of record.points) {
+    if (!point || typeof point !== 'object') return null;
+    const { x, y } = point as { x?: unknown; y?: unknown };
+    if (typeof x !== 'number' || typeof y !== 'number') return null;
+    if (!isFiniteCoord(x) || !isFiniteCoord(y)) return null;
+    points.push({ x, y });
+  }
+  return { type: 'LineString', points };
 }
 
 export function pointInPolygon(point: Point, polygon: Point[]): boolean {

@@ -2,9 +2,11 @@ import { z } from 'zod';
 import { AppError } from '../domain/errors.js';
 import { LEVELS } from '../shared/levels.js';
 import { TILE_TYPES } from '../shared/tiles.js';
+import { ROUTE_KINDS } from '../shared/types.js';
 
 const levelSchema = z.enum(LEVELS);
 const tileTypeSchema = z.enum(TILE_TYPES);
+const routeKindSchema = z.enum(ROUTE_KINDS);
 
 export const polygonSchema = z.object({
   type: z.literal('Polygon'),
@@ -41,6 +43,25 @@ export const createPlaceSchema = z.object({
 });
 
 export const patchPlaceSchema = createPlaceSchema.partial().refine((value) => Object.keys(value).length > 0, {
+  message: '至少提供一个字段',
+});
+
+const lineStringSchema = z.object({
+  type: z.literal('LineString'),
+  points: z.array(z.object({ x: z.number(), y: z.number() })).min(2).max(256),
+});
+
+export const createRouteSchema = z.object({
+  id: z.string().optional(),
+  regionId: z.string(),
+  name: z.string(),
+  kind: routeKindSchema.optional(),
+  geometry: lineStringSchema,
+  width: z.number().nullable().optional(),
+  style: z.string().nullable().optional(),
+});
+
+export const patchRouteSchema = createRouteSchema.partial().refine((value) => Object.keys(value).length > 0, {
   message: '至少提供一个字段',
 });
 
